@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Plus, X } from "lucide-react";
+import { Hash, Pencil, X } from "lucide-react";
 import type { TagItem, VideoDetail } from "@/types";
 
 type Props = {
@@ -10,9 +10,14 @@ type Props = {
 };
 
 /**
- * 视频信息板块：
- * - 简介：默认折叠 3 行，整块可点击展开/收起。简介为空时不渲染。
- * - 标签：横向 chip 列表 + 一个圆形 "+" 按钮调出编辑器；编辑器内仅展示候选标签的 checkbox 网格。
+ * 简介 + 标签合并卡。
+ * - 上半部分是简介：默认折叠 3 行，整块可点击展开/收起；简介为空时不渲染。
+ * - 下半部分是标签：横向 chip 列表 + 一个"编辑"按钮调出标签编辑器。
+ *
+ * 视觉上和上一版的"两张分离卡"相比，整体感更强：
+ * - 一张大卡内分两个小区块，区块之间用细分隔线
+ * - 简介区块加 "简介" 标题前缀
+ * - 标签区块加 # 图标暗示
  */
 export function VideoInfoPanel({
   video,
@@ -65,8 +70,8 @@ export function VideoInfoPanel({
     <section className="vd-info" aria-label="视频信息">
       {showDescription && (
         <div
-          className={`vd-info__desc ${descExpanded ? "is-expanded" : ""} ${
-            descriptionLong ? "is-clickable" : ""
+          className={`vd-info__desc${descExpanded ? " is-expanded" : ""}${
+            descriptionLong ? " is-clickable" : ""
           }`}
           role={descriptionLong ? "button" : undefined}
           tabIndex={descriptionLong ? 0 : undefined}
@@ -79,25 +84,24 @@ export function VideoInfoPanel({
             }
           }}
         >
+          <div className="vd-info__section-head">
+            <span className="vd-info__section-title">简介</span>
+            {descriptionLong && (
+              <span className="vd-info__desc-toggle">
+                {descExpanded ? "收起" : "展开"}
+              </span>
+            )}
+          </div>
           <p className="vd-info__desc-text">{description}</p>
-          {descriptionLong && (
-            <span className="vd-info__desc-toggle">
-              {descExpanded ? "收起" : "展开"}
-            </span>
-          )}
         </div>
       )}
 
-      <div className="vd-info__tags-row">
-        <div className="vd-info__tags">
-          {tags.length === 0 && (
-            <span className="vd-info__tags-empty">暂无标签</span>
-          )}
-          {tags.map((t) => (
-            <span key={t} className="vd-tag">
-              #{t}
-            </span>
-          ))}
+      <div className="vd-info__tags">
+        <div className="vd-info__section-head">
+          <span className="vd-info__section-title">
+            <Hash size={14} aria-hidden="true" />
+            标签
+          </span>
           {onTagsChange && (
             <button
               type="button"
@@ -105,9 +109,20 @@ export function VideoInfoPanel({
               onClick={openTagEditor}
               aria-label="编辑标签"
             >
-              <Plus size={14} />
+              <Pencil size={13} />
               <span>编辑</span>
             </button>
+          )}
+        </div>
+        <div className="vd-info__tags-list">
+          {tags.length === 0 ? (
+            <span className="vd-info__tags-empty">暂无标签</span>
+          ) : (
+            tags.map((t) => (
+              <span key={t} className="vd-tag">
+                #{t}
+              </span>
+            ))
           )}
         </div>
       </div>
@@ -136,7 +151,9 @@ export function VideoInfoPanel({
                   <button
                     type="button"
                     key={tag.id}
-                    className={`vd-tag-editor__chip ${checked ? "is-active" : ""}`}
+                    className={`vd-tag-editor__chip${
+                      checked ? " is-active" : ""
+                    }`}
                     onClick={() =>
                       setDraftTags((prev) =>
                         prev.includes(tag.label)
@@ -147,9 +164,7 @@ export function VideoInfoPanel({
                     aria-pressed={checked}
                   >
                     <span>{tag.label}</span>
-                    {typeof tag.count === "number" && (
-                      <em>{tag.count}</em>
-                    )}
+                    {typeof tag.count === "number" && <em>{tag.count}</em>}
                   </button>
                 );
               })

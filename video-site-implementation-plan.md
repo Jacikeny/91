@@ -1292,6 +1292,36 @@ src/
 
 任何一项都可以在小改动内回归 plan 原设计，等统一确认后再动。
 
+### 14.5 视频详情/播放页视觉重写（2026-05-21）
+
+第一版详情页视觉过于"列表化"，标题 + 一行 `·` 分隔 meta + 上下灰线工具条 + 两张分离的简介/标签卡，缺少视觉重心和氛围感。本次按"沉浸感 + 信息层级清晰"的方向重写，仅改 UI，不动数据流和后端接口。
+
+变化点：
+
+- **Hero ambient 背景**：详情页根加 `.vd-ambient` 层，把当前视频海报作为模糊底色（桌面 48 px blur，opacity 0.42，高度 520 px；平板/手机依次降到 36/28 px blur 和 380/280 px 高度），叠加暖橙径向光晕和"过渡到页面色"的纵向渐变，仅顶部一段，不染整页。`.vd-page` 设为 `isolation: isolate` 形成新的 stacking context。
+- **播放器外光环**：播放器外加 `.vd-player-wrap`，1 px 暖橙渐变描边 + 顶部柔光 + 24/72 重阴影；移动端去除外圈和圆角，让播放器顶到容器边缘。
+- **标题升级**：从 `font-2xl` 升到 `font-3xl`（手机端依次降到 xl/lg），加文字阴影提升在 ambient 上的可读性。
+- **作者 + meta 重组**：删除原 `·` 分隔列表。新增 `.vd-author`（首字大写圆形渐变头像 + 名字胶囊）和 `.vd-meta__chip` 列表（来源、画质、时长、观看数、发布时间）。每个胶囊有自己的 `data-tone`：`accent` 用于 HD；网盘 tone（`quark / p115 / pikpak / wopan / onedrive`）走对应品牌色。
+- **操作工具条**：从"上下灰线"改为整体浮起的玻璃卡（毛玻璃 `backdrop-filter: blur(12px)` + 1 px 描边 + 阴影）。点赞 + 点踩组合胶囊在 hover/focus 时露出 accent 描边和 `accent-softer` 光环；"不再显示" 默认透明、hover 才露出 danger 红。点赞 burst 动画时长 280→320 ms，scale 1.18→1.20。
+- **简介 + 标签合并卡**：原本两张分离卡合并成一张 `.vd-info` 大卡，子区用 `.vd-info__section-head` 小标题区分（"简介" / `#` 图标 + "标签"），中间细分隔线。整卡 hover border 变亮。标签编辑按钮图标从 `+` 改为铅笔 `Pencil`。标签编辑器改为卡内行内弹层。
+- **推荐栏头部**：从单 div 升级为 header：左侧 4×28 渐变发光竖条 + 标题 + 副标题（"根据当前视频 · N 条"）。item hover 时缩略图微缩放 1.04 + 整 item 上浮 1 px。
+- **响应式**：>=1024 双列；<=1024 折单列；<=768 平板触控目标 ≥44 px、meta 胶囊缩到 22 px 高、播放器顶到容器边缘；<=480 手机标题 3 行、操作栏点赞/点踩平分主行、"不再显示"折成 44×44 纯图标按钮（保留 `aria-label`）。
+
+代码位置：
+
+- `src/pages/VideoDetailPage.tsx`：外层结构从 `container page-section` 改为 `vd-page > vd-ambient + vd-page__inner`；删除 `.vd-toolbar` 包裹层（`VideoActions` 自身是工具条）。
+- `src/components/VideoMetaHeader.tsx`：标题 + `.vd-header__row`（作者 + meta 胶囊）。
+- `src/components/VideoActions.tsx`：图标 16→18 px；外层加 `role=toolbar`；类名拼接改为模板字符串。
+- `src/components/VideoInfoPanel.tsx`：简介与标签合并到 `.vd-info`；section head 模式。
+- `src/components/RecommendedRail.tsx`：仅改头部 JSX，预览 hooks（`previewController` / `previewIntent` / `useInViewport` / `PreviewVideo`）保持不变。
+- `src/styles/video-detail.css`：全面重写。
+
+不变项：
+
+- 所有数据请求 (`fetchVideoDetail` / `fetchTags` / `recordView` / `updateVideoTags` / `hideVideo`) 和 `like` API 调用、点踩本地 state、转码轮询逻辑都未改动。
+- 不引入新依赖，颜色全部走 `tokens.css`，未使用 `!important`。
+- `lint` (`tsc --noEmit`) 和 `build` (`tsc -b && vite build`) 均通过。
+
 ## 15. 后端集成方案（网盘驱动 + 元数据 + 预览生成）
 
 本节记录接入真实网盘后端的架构和关键决策。

@@ -37,7 +37,15 @@ export function RecommendedRail({ videos }: Props) {
 
   return (
     <aside className="vd-rail" aria-label="推荐视频">
-      <div className="vd-rail__head">推荐视频</div>
+      <header className="vd-rail__head">
+        <span className="vd-rail__head-bar" aria-hidden="true" />
+        <div className="vd-rail__head-text">
+          <h2 className="vd-rail__head-title">推荐视频</h2>
+          <span className="vd-rail__head-sub">
+            根据当前视频 · {videos.length} 条
+          </span>
+        </div>
+      </header>
       <ul className="vd-rail__list">
         {videos.map((v) => (
           <RecommendedItem key={v.id} video={v} />

@@ -6,9 +6,12 @@ type Props = {
 };
 
 /**
- * 详情页标题块：标题 + 一行流式元信息（meta）。
- * 元信息按照「主→次」的顺序：作者 / 来源网盘 / 画质 / 时长 / 浏览量 / 发布时间。
- * 缺省字段会被自动跳过，不会留下空的分隔点。
+ * 详情页标题块。
+ *
+ * 视觉：
+ * - 标题：大、粗、最高两行
+ * - meta：作者首字头像 + 名字 + 一组小胶囊（来源、画质、时长、观看数、发布时间）
+ *   每个胶囊有自己的语义色彩，避免传统 "·" 分隔列表的列表感。
  */
 export function VideoMetaHeader({ video }: Props) {
   const author = (video.author ?? "").trim();
@@ -16,64 +19,51 @@ export function VideoMetaHeader({ video }: Props) {
   const quality = (video.quality ?? "").trim();
   const duration = (video.duration ?? "").trim();
   const published = (video.publishedAt ?? "").trim();
-
-  const parts: { key: string; node: React.ReactNode; tone?: "accent" }[] = [];
-
-  if (author) {
-    parts.push({
-      key: "author",
-      node: <span className="vd-meta__author">{author}</span>,
-    });
-  }
-  if (source) {
-    parts.push({
-      key: "source",
-      node: (
-        <span
-          className="vd-meta__source"
-          data-kind={sourceKindFromLabel(source)}
-        >
-          {source}
-        </span>
-      ),
-    });
-  }
-  if (quality) {
-    parts.push({ key: "quality", node: <>{quality}</> });
-  }
-  if (duration) {
-    parts.push({ key: "duration", node: <>{duration}</> });
-  }
-  parts.push({
-    key: "views",
-    node: <>{formatCount(video.views)} 次观看</>,
-  });
-  if (published) {
-    parts.push({ key: "published", node: <>{published}</> });
-  }
+  const sourceKind = sourceKindFromLabel(source);
 
   return (
     <header className="vd-header">
       <h1 className="vd-header__title" title={video.title}>
         {video.title}
       </h1>
-      <ul className="vd-meta" aria-label="视频信息">
-        {parts.map((p, i) => (
-          <li key={p.key} className="vd-meta__item">
-            {p.node}
-            {i < parts.length - 1 && (
-              <span className="vd-meta__sep" aria-hidden="true">
-                ·
-              </span>
-            )}
+
+      <div className="vd-header__row">
+        {author && (
+          <div className="vd-author" aria-label={`作者 ${author}`}>
+            <span className="vd-author__avatar" aria-hidden="true">
+              {author.slice(0, 1)}
+            </span>
+            <span className="vd-author__name">{author}</span>
+          </div>
+        )}
+
+        <ul className="vd-meta" aria-label="视频信息">
+          {source && (
+            <li className="vd-meta__chip" data-tone={sourceKind || "neutral"}>
+              <span className="vd-meta__dot" aria-hidden="true" />
+              {source}
+            </li>
+          )}
+          {quality && (
+            <li
+              className="vd-meta__chip"
+              data-tone={quality.toUpperCase() === "HD" ? "accent" : "neutral"}
+            >
+              {quality}
+            </li>
+          )}
+          {duration && <li className="vd-meta__chip">{duration}</li>}
+          <li className="vd-meta__chip">
+            <strong>{formatCount(video.views)}</strong> 次观看
           </li>
-        ))}
-      </ul>
+          {published && <li className="vd-meta__chip">{published}</li>}
+        </ul>
+      </div>
     </header>
   );
 }
 
-// 根据 sourceLabel 识别网盘类型，给来源徽标上色。复制自 VideoCard，避免循环依赖。
+// 根据 sourceLabel 识别网盘类型，用于胶囊配色。
 function sourceKindFromLabel(label: string): string {
   const value = label.toLowerCase();
   if (value.includes("夸克") || value.includes("quark")) return "quark";

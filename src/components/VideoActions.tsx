@@ -10,13 +10,14 @@ type Props = {
 };
 
 /**
- * 视频操作栏。
- * - 点赞 + 点踩合并成一个胶囊（中间用分隔线），两侧都显示计数。
- * - "不再显示" 单独成一个独立按钮，靠右放置时由父级处理。
+ * 视频操作工具条。
+ * - 整体是一张浮起的圆角玻璃卡，比上一版的横线分隔更"成体"。
+ * - 点赞 + 点踩组成一个胶囊（中间一道竖线分隔），两侧分别带计数。
+ * - "不再显示" 单独成一个次要按钮，hover 时露出 danger 色。
  *
- * 注意：当前后端只有点赞接口（POST /api/video/:id/like），
- * 点踩仅在前端记录，不会持久化。等后端补上 dislike 接口时，把
- * handleDislike 里的本地 state 升级成网络请求即可。
+ * 功能没变：
+ * - 后端只有点赞接口（POST /api/video/:id/like），点踩仅本地 state。
+ * - 失败回滚已经处理。
  */
 export function VideoActions({ video, onHideVideo, hideSaving }: Props) {
   const [likes, setLikes] = useState(video.likes ?? 0);
@@ -30,7 +31,7 @@ export function VideoActions({ video, onHideVideo, hideSaving }: Props) {
     setLiked(true);
     setLikes((n) => n + 1);
     setBursting(true);
-    window.setTimeout(() => setBursting(false), 280);
+    window.setTimeout(() => setBursting(false), 320);
 
     if (disliked) {
       setDisliked(false);
@@ -68,27 +69,31 @@ export function VideoActions({ video, onHideVideo, hideSaving }: Props) {
   }
 
   return (
-    <div className="vd-actions">
+    <div className="vd-actions" role="toolbar" aria-label="视频操作">
       <div className="vd-actions__group" role="group" aria-label="点赞和点踩">
         <button
           type="button"
-          className={`vd-actions__pill vd-actions__like ${liked ? "is-active" : ""} ${bursting ? "is-bursting" : ""}`}
+          className={`vd-actions__pill vd-actions__like${
+            liked ? " is-active" : ""
+          }${bursting ? " is-bursting" : ""}`}
           onClick={handleLike}
           aria-pressed={liked}
           aria-label="点赞"
         >
-          <ThumbsUp size={16} fill={liked ? "currentColor" : "none"} />
+          <ThumbsUp size={18} fill={liked ? "currentColor" : "none"} />
           <span className="vd-actions__count">{formatCount(likes)}</span>
         </button>
         <span className="vd-actions__divider" aria-hidden="true" />
         <button
           type="button"
-          className={`vd-actions__pill vd-actions__dislike ${disliked ? "is-active" : ""}`}
+          className={`vd-actions__pill vd-actions__dislike${
+            disliked ? " is-active" : ""
+          }`}
           onClick={handleDislike}
           aria-pressed={disliked}
           aria-label="点踩"
         >
-          <ThumbsDown size={16} fill={disliked ? "currentColor" : "none"} />
+          <ThumbsDown size={18} fill={disliked ? "currentColor" : "none"} />
           <span className="vd-actions__count">{formatCount(dislikes)}</span>
         </button>
       </div>

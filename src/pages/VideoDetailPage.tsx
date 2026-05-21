@@ -85,11 +85,14 @@ export default function VideoDetailPage() {
   if (loading) {
     return (
       <AppShell>
-        <div className="container page-section">
-          <div className="vd-skeleton">
-            <div className="vd-skeleton__player" />
-            <div className="vd-skeleton__title" />
-            <div className="vd-skeleton__meta" />
+        <div className="vd-page">
+          <div className="vd-ambient" aria-hidden="true" />
+          <div className="container vd-page__inner">
+            <div className="vd-skeleton">
+              <div className="vd-skeleton__player" />
+              <div className="vd-skeleton__title" />
+              <div className="vd-skeleton__meta" />
+            </div>
           </div>
         </div>
       </AppShell>
@@ -99,8 +102,10 @@ export default function VideoDetailPage() {
   if (!detail) {
     return (
       <AppShell>
-        <div className="container page-section">
-          <div className="vd-empty">视频不存在或已被移除</div>
+        <div className="vd-page">
+          <div className="container vd-page__inner">
+            <div className="vd-empty">视频不存在或已被移除</div>
+          </div>
         </div>
       </AppShell>
     );
@@ -108,37 +113,50 @@ export default function VideoDetailPage() {
 
   return (
     <AppShell>
-      <div className="container page-section vd-page">
-        <div className="vd-layout">
-          <div className="vd-main" ref={detailTopRef}>
-            <div className="vd-player">
-              <VideoPlayer
-                src={detail.videoSrc}
-                poster={detail.poster}
-                title={detail.title}
-                onFirstPlay={handleFirstPlay}
-              />
-            </div>
+      <div className="vd-page">
+        {/* Ambient 背景层：用海报作模糊底色，叠加渐变过渡到页面背景 */}
+        <div
+          className="vd-ambient"
+          aria-hidden="true"
+          style={{
+            backgroundImage: detail.poster
+              ? `url(${detail.poster})`
+              : undefined,
+          }}
+        />
 
-            <VideoMetaHeader video={detail} />
+        <div className="container vd-page__inner">
+          <div className="vd-layout">
+            <div className="vd-main" ref={detailTopRef}>
+              <div className="vd-player-wrap">
+                <div className="vd-player">
+                  <VideoPlayer
+                    src={detail.videoSrc}
+                    poster={detail.poster}
+                    title={detail.title}
+                    onFirstPlay={handleFirstPlay}
+                  />
+                </div>
+              </div>
 
-            <div className="vd-toolbar">
+              <VideoMetaHeader video={detail} />
+
               <VideoActions
                 video={detail}
                 onHideVideo={handleHideVideo}
                 hideSaving={hideSaving}
               />
+
+              <VideoInfoPanel
+                video={detail}
+                availableTags={tags}
+                tagSaving={tagSaving}
+                onTagsChange={handleTagsChange}
+              />
             </div>
 
-            <VideoInfoPanel
-              video={detail}
-              availableTags={tags}
-              tagSaving={tagSaving}
-              onTagsChange={handleTagsChange}
-            />
+            <RecommendedRail videos={detail.relatedVideos} />
           </div>
-
-          <RecommendedRail videos={detail.relatedVideos} />
         </div>
       </div>
     </AppShell>
