@@ -86,13 +86,13 @@ func (c *Catalog) UpsertVideo(ctx context.Context, v *Video) error {
 	_, err := c.db.ExecContext(ctx, `
 INSERT INTO videos (
   id, drive_id, file_id, file_name, content_hash, parent_id, title, author, tags,
-  duration_seconds, size_bytes, ext, quality, thumbnail_url,
+  duration_seconds, size_bytes, ext, quality, thumbnail_url, thumbnail_status,
   preview_file_id, preview_local, preview_status,
   views, favorites, comments, likes, dislikes,
   category, hidden, badges, description, published_at, created_at, updated_at
 ) VALUES (
   ?, ?, ?, ?, ?, ?, ?, ?, ?,
-  ?, ?, ?, ?, ?,
+  ?, ?, ?, ?, ?, CASE WHEN COALESCE(?, '') != '' THEN 'ready' ELSE 'pending' END,
   ?, ?, ?,
   ?, ?, ?, ?, ?,
   ?, ?, ?, ?, ?, ?, ?
@@ -114,13 +114,21 @@ ON CONFLICT(id) DO UPDATE SET
   ext             = excluded.ext,
   quality         = excluded.quality,
   thumbnail_url   = excluded.thumbnail_url,
+  -- thumbnail_url 写非空就意味着文件已就绪（要么 worker 抽帧填的本地 /p/thumb/<id>，
+  -- 要么网盘 API 直接给的远程 URL，要么管理员手动指定）。同步把 status 标 'ready'，
+  -- 避免出现 "url 非空 + status='pending'" 的脏状态。url 被改成空（本调用不发生，
+  -- 走 clearVolatileOneDriveThumbnails 直 SQL）保留原状态。
+  thumbnail_status= CASE
+                      WHEN COALESCE(excluded.thumbnail_url, '') != '' THEN 'ready'
+                      ELSE videos.thumbnail_status
+                    END,
   category        = excluded.category,
   badges          = excluded.badges,
   description     = excluded.description,
   updated_at      = excluded.updated_at
 `,
 		v.ID, v.DriveID, v.FileID, v.FileName, v.ContentHash, v.ParentID, v.Title, v.Author, string(tagsJSON),
-		v.DurationSeconds, v.Size, v.Ext, v.Quality, v.ThumbnailURL,
+		v.DurationSeconds, v.Size, v.Ext, v.Quality, v.ThumbnailURL, v.ThumbnailURL,
 		v.PreviewFileID, v.PreviewLocal, nullableStatus(v.PreviewStatus),
 		v.Views, v.Favorites, v.Comments, v.Likes, v.Dislikes,
 		v.Category, boolToInt(v.Hidden), string(badgesJSON), v.Description,
@@ -315,9 +323,19 @@ func (c *Catalog) UpdateVideoMeta(ctx context.Context, id string, p VideoMetaPat
 		parts = append(parts, "thumbnail_url = ?")
 		args = append(args, p.ThumbnailURL)
 	}
-	if p.ThumbnailStatus != "" {
+	switch {
+	case p.ThumbnailStatus != "":
+		// 调用方显式指定 status —— 信任之；典型是 worker 把状态置 'failed' 或
+		// 在重试时显式置 'pending'。
 		parts = append(parts, "thumbnail_status = ?")
 		args = append(args, nullableStatus(p.ThumbnailStatus))
+	case p.ThumbnailURL != "":
+		// 调用方写了 url 但没显式给 status —— 视为"封面就绪"。url 非空意味着
+		// 浏览器访问那个 URL 能拿到图（要么是本地 /p/thumb/<id>，要么是网盘 API
+		// 直接返回的远程 URL）。同步把 status 标 'ready'，避免 url 非空但 status
+		// 仍是 'pending' 的脏状态（修过的历史 bug）。
+		parts = append(parts, "thumbnail_status = ?")
+		args = append(args, nullableStatus("ready"))
 	}
 	if p.DurationSeconds > 0 {
 		parts = append(parts, "duration_seconds = ?")

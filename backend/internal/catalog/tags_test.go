@@ -719,3 +719,267 @@ func TestMigratePrunesPreexistingOrphanCollectionTags(t *testing.T) {
 		t.Fatal("migrate wrongly pruned user-source orphan tag")
 	}
 }
+
+
+// TestReconcileThumbnailStatusOnce 检查升级时的"url 已写但 status=pending"修复。
+// catalog.Open 会自动跑这个 migration（调用链 Open→ensureSchema→reconcileThumbnailStatusOnce）。
+// 因此这里通过手动写脏数据 + 直接调 reconcile 来验证；脏数据是"绕过 Open
+// 默认运行的 migration"的近似 —— 写完后状态就和遗留库一样。
+func TestReconcileThumbnailStatusOnce(t *testing.T) {
+	ctx := context.Background()
+	cat, err := Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { cat.Close() })
+
+	now := time.Now()
+	cases := []struct {
+		id, url, status string
+		wantStatus      string
+	}{
+		{"v-pending-url", "/p/thumb/v-pending-url", "pending", "ready"}, // 主要修复目标
+		{"v-empty-url-pending", "", "pending", "pending"},                // 没 url 不动
+		{"v-failed-with-url", "/p/thumb/v-failed-with-url", "failed", "failed"}, // 显式失败保留
+		{"v-empty-url-failed", "", "failed", "failed"},                   // 失败 + 没 url 也保留
+		{"v-already-ready", "/p/thumb/v-already-ready", "ready", "ready"}, // 幂等
+	}
+	for _, c := range cases {
+		if err := cat.UpsertVideo(ctx, &Video{
+			ID: c.id, DriveID: "d", FileID: "f-" + c.id,
+			Title: c.id, ThumbnailURL: c.url,
+			PublishedAt: now, CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatalf("seed %s: %v", c.id, err)
+		}
+		// UpsertVideo 默认把 thumbnail_status 留给 schema DEFAULT 'pending'。
+		// 显式覆盖成测试想要的状态。
+		if _, err := cat.db.ExecContext(ctx,
+			`UPDATE videos SET thumbnail_status = ? WHERE id = ?`, c.status, c.id); err != nil {
+			t.Fatalf("force seed status %s: %v", c.id, err)
+		}
+	}
+	// 抹掉 Open 自动跑过的 marker，让我们直接验证函数本体
+	if err := cat.SetSetting(ctx, "videos.thumbnail_status.url_present_to_ready_migrated", ""); err != nil {
+		t.Fatalf("clear marker: %v", err)
+	}
+
+	if err := cat.reconcileThumbnailStatusOnce(ctx); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	for _, c := range cases {
+		var got string
+		if err := cat.db.QueryRowContext(ctx,
+			`SELECT thumbnail_status FROM videos WHERE id = ?`, c.id).Scan(&got); err != nil {
+			t.Fatalf("read %s: %v", c.id, err)
+		}
+		if got != c.wantStatus {
+			t.Errorf("%s: status = %q, want %q", c.id, got, c.wantStatus)
+		}
+	}
+
+	// 二次调用应是 no-op（marker 已写）
+	// 为验证：人为再插一条脏数据，第二次 reconcile 不应碰它
+	if err := cat.UpsertVideo(ctx, &Video{
+		ID: "v-second-call", DriveID: "d", FileID: "f-2nd",
+		Title: "second", ThumbnailURL: "/p/thumb/v-second-call",
+		PublishedAt: now, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed second-call: %v", err)
+	}
+	if _, err := cat.db.ExecContext(ctx,
+		`UPDATE videos SET thumbnail_status='pending' WHERE id='v-second-call'`); err != nil {
+		t.Fatalf("force-pending second-call: %v", err)
+	}
+	if err := cat.reconcileThumbnailStatusOnce(ctx); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	var status string
+	if err := cat.db.QueryRowContext(ctx,
+		`SELECT thumbnail_status FROM videos WHERE id='v-second-call'`).Scan(&status); err != nil {
+		t.Fatalf("read second-call: %v", err)
+	}
+	if status != "pending" {
+		t.Errorf("second-call status = %q, want pending (migration should be no-op after marker)", status)
+	}
+}
+
+
+// TestUpsertVideoSyncsThumbnailStatus 验证 scanner 创建/补回视频时
+// thumbnail_status 跟随 thumbnail_url 自动设。这是历史 bug 的修复回归测试 ——
+// 之前 UpsertVideo 的 SQL 不带 thumbnail_status 列，所有新视频都依赖
+// 列 DEFAULT 'pending'，url 非空时和 status 字段长期不一致。
+func TestUpsertVideoSyncsThumbnailStatusFromURL(t *testing.T) {
+	ctx := context.Background()
+	cat, err := Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { cat.Close() })
+
+	now := time.Now()
+	cases := []struct {
+		name       string
+		thumb      string
+		wantStatus string
+	}{
+		{"insert with remote URL → ready", "https://drive.example/thumb.jpg", "ready"},
+		{"insert with local /p/thumb URL → ready", "/p/thumb/insert-local", "ready"},
+		{"insert without URL → pending", "", "pending"},
+	}
+	for _, c := range cases {
+		id := "ins-" + c.wantStatus + "-" + c.thumb
+		if err := cat.UpsertVideo(ctx, &Video{
+			ID: id, DriveID: "d", FileID: "f-" + id, Title: c.name,
+			ThumbnailURL: c.thumb, PublishedAt: now, CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatalf("%s: upsert: %v", c.name, err)
+		}
+		var got string
+		if err := cat.db.QueryRowContext(ctx,
+			`SELECT thumbnail_status FROM videos WHERE id = ?`, id).Scan(&got); err != nil {
+			t.Fatalf("%s: read: %v", c.name, err)
+		}
+		if got != c.wantStatus {
+			t.Errorf("%s: status = %q, want %q", c.name, got, c.wantStatus)
+		}
+	}
+}
+
+func TestUpsertVideoOnConflictSyncsStatusOnURLChange(t *testing.T) {
+	ctx := context.Background()
+	cat, err := Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { cat.Close() })
+
+	now := time.Now()
+	id := "conflict-vid"
+
+	// 第一次 upsert：无 url → pending
+	if err := cat.UpsertVideo(ctx, &Video{
+		ID: id, DriveID: "d", FileID: "f", Title: "v",
+		PublishedAt: now, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("first upsert: %v", err)
+	}
+	var s string
+	cat.db.QueryRowContext(ctx, `SELECT thumbnail_status FROM videos WHERE id=?`, id).Scan(&s)
+	if s != "pending" {
+		t.Fatalf("first: status = %q, want pending", s)
+	}
+
+	// 第二次 upsert（ON CONFLICT 路径）：带上 url → 自动同步 status='ready'
+	if err := cat.UpsertVideo(ctx, &Video{
+		ID: id, DriveID: "d", FileID: "f", Title: "v",
+		ThumbnailURL: "https://drive.example/thumb.jpg",
+		PublishedAt:  now, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("second upsert: %v", err)
+	}
+	cat.db.QueryRowContext(ctx, `SELECT thumbnail_status FROM videos WHERE id=?`, id).Scan(&s)
+	if s != "ready" {
+		t.Fatalf("after url upsert: status = %q, want ready", s)
+	}
+
+	// 第三次 upsert：清空 url（直 SQL 模拟 clearVolatileOneDriveThumbnails 没走 UpsertVideo
+	// 这条路径，但场景就是用户手动把 thumbnail 改空。url='' 时 UpsertVideo
+	// 不应改变已有 status，因为 UpsertVideo 不是清空场景的合法接口）。
+	if err := cat.UpsertVideo(ctx, &Video{
+		ID: id, DriveID: "d", FileID: "f", Title: "v",
+		ThumbnailURL: "",
+		PublishedAt:  now, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("third upsert: %v", err)
+	}
+	cat.db.QueryRowContext(ctx, `SELECT thumbnail_status FROM videos WHERE id=?`, id).Scan(&s)
+	if s != "ready" {
+		t.Fatalf("after url cleared via upsert: status = %q, want unchanged 'ready'", s)
+	}
+}
+
+func TestUpdateVideoMetaInfersReadyWhenURLPresent(t *testing.T) {
+	ctx := context.Background()
+	cat, err := Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { cat.Close() })
+
+	now := time.Now()
+	id := "meta-test"
+	if err := cat.UpsertVideo(ctx, &Video{
+		ID: id, DriveID: "d", FileID: "f", Title: "v",
+		PublishedAt: now, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// status 初始 pending（无 url）
+	var s string
+	cat.db.QueryRowContext(ctx, `SELECT thumbnail_status FROM videos WHERE id=?`, id).Scan(&s)
+	if s != "pending" {
+		t.Fatalf("seed status = %q, want pending", s)
+	}
+
+	// 仅传 ThumbnailURL，期望 status 自动推到 'ready'
+	if err := cat.UpdateVideoMeta(ctx, id, VideoMetaPatch{
+		ThumbnailURL: "/p/thumb/" + id,
+	}); err != nil {
+		t.Fatalf("update meta: %v", err)
+	}
+	cat.db.QueryRowContext(ctx, `SELECT thumbnail_status FROM videos WHERE id=?`, id).Scan(&s)
+	if s != "ready" {
+		t.Errorf("after URL-only patch: status = %q, want ready (auto-inferred)", s)
+	}
+
+	// 显式传 ThumbnailStatus 时 patch 应该被尊重，而不是被自动推断覆盖
+	if err := cat.UpdateVideoMeta(ctx, id, VideoMetaPatch{
+		ThumbnailURL:    "/p/thumb/another",
+		ThumbnailStatus: "failed",
+	}); err != nil {
+		t.Fatalf("update meta with status: %v", err)
+	}
+	cat.db.QueryRowContext(ctx, `SELECT thumbnail_status FROM videos WHERE id=?`, id).Scan(&s)
+	if s != "failed" {
+		t.Errorf("explicit status overrides inference: got %q, want failed", s)
+	}
+}
+
+func TestClearVolatileOneDriveThumbnailsResetsStatus(t *testing.T) {
+	ctx := context.Background()
+	cat, err := Open(t.TempDir() + "/catalog.db")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { cat.Close() })
+
+	now := time.Now()
+	if err := cat.UpsertVideo(ctx, &Video{
+		ID: "od-vid", DriveID: "OneDrive", FileID: "od-1", Title: "od",
+		ThumbnailURL: "https://westus21-mediap.svc.ms/transform/thumbnail?provider=spo&tempauth=expired",
+		PublishedAt:  now, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// 经 UpsertVideo 自动同步，此时 status='ready'
+	var s string
+	cat.db.QueryRowContext(ctx, `SELECT thumbnail_status FROM videos WHERE id='od-vid'`).Scan(&s)
+	if s != "ready" {
+		t.Fatalf("pre-clear: status = %q, want ready", s)
+	}
+
+	if err := cat.clearVolatileOneDriveThumbnails(ctx); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+
+	var url string
+	cat.db.QueryRowContext(ctx, `SELECT COALESCE(thumbnail_url,''), thumbnail_status FROM videos WHERE id='od-vid'`).Scan(&url, &s)
+	if url != "" {
+		t.Errorf("url after clear = %q, want empty", url)
+	}
+	if s != "pending" {
+		t.Errorf("status after clear = %q, want pending (so worker re-enqueues)", s)
+	}
+}

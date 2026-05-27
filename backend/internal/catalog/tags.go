@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"regexp"
 	"sort"
 	"strings"
@@ -63,6 +64,14 @@ func (c *Catalog) migrate(ctx context.Context) error {
 	// 这里一次性把所有 drive 强制重置为 1，并用 marker setting 记号，避免之后
 	// 再覆盖用户后续在 UI 里 per-drive 改成关的设置。
 	if err := c.resetDriveTeaserEnabledToDefaultOnce(ctx); err != nil {
+		return err
+	}
+	// 一次性修正：thumbnail_status 列是后加的（DEFAULT 'pending'），所有列加之前
+	// 已有 thumbnail_url 的视频都被填成了 pending。worker 入队按 url 判定不会重复
+	// 生成，但 status 字段对管理员/统计是误导（admin API 自己已经按 url 计数所以
+	// 不受影响，但直接 SQL 查会以为有 N 千个待生成）。
+	// 这里把"url 已写但 status 仍是 pending"的修正为 ready；status=failed 不动。
+	if err := c.reconcileThumbnailStatusOnce(ctx); err != nil {
 		return err
 	}
 	if _, err := c.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_videos_content_hash ON videos(content_hash)`); err != nil {
@@ -160,10 +169,58 @@ func (c *Catalog) resetDriveTeaserEnabledToDefaultOnce(ctx context.Context) erro
 	return nil
 }
 
+// reconcileThumbnailStatusOnce 把所有"封面 URL 已写但 thumbnail_status 仍停留在
+// 'pending'"的视频行修正为 'ready'。仅在历史上没跑过这条迁移时执行（marker 守护）。
+//
+// 为什么需要：thumbnail_status 列是历史某次加进 schema 的（addColumnIfMissing
+// 在 tags.go:51，DEFAULT 'pending'）。列加入时所有已存在的视频 thumbnail_url
+// 已经填好（指向本地 /p/thumb/<id>），但 status 列 ALTER 时按 DEFAULT 全部填了
+// 'pending'。worker 入队按 url 判定（不看 status）所以行为正确，但：
+//   - 直接 SQL 查 thumbnail_status='pending' 会以为有几千条待生成
+//   - 管理员凭直觉认知字段名时会被误导
+//
+// 修正策略：
+//   - thumbnail_url 非空 + status 非 'ready' + status 非 'failed' → 改成 'ready'
+//   - status='failed' 不动（这是 worker 显式标的失败，要保留以便管理员手动重生）
+//
+// 幂等保证：marker setting 写过就不再跑，避免每次重启都 update 一遍。
+func (c *Catalog) reconcileThumbnailStatusOnce(ctx context.Context) error {
+	const markerKey = "videos.thumbnail_status.url_present_to_ready_migrated"
+	marker, err := c.GetSetting(ctx, markerKey, "")
+	if err != nil {
+		return fmt.Errorf("read %s marker: %w", markerKey, err)
+	}
+	if strings.TrimSpace(marker) == "1" {
+		return nil
+	}
+	res, err := c.db.ExecContext(ctx, `
+UPDATE videos
+   SET thumbnail_status = 'ready',
+       updated_at = ?
+ WHERE COALESCE(thumbnail_url, '') != ''
+   AND COALESCE(thumbnail_status, 'pending') NOT IN ('ready', 'failed')
+`, time.Now().UnixMilli())
+	if err != nil {
+		return fmt.Errorf("reconcile thumbnail_status: %w", err)
+	}
+	if affected, err := res.RowsAffected(); err == nil && affected > 0 {
+		log.Printf("[catalog] reconciled %d video(s) thumbnail_status pending→ready (url already written)", affected)
+	}
+	if err := c.SetSetting(ctx, markerKey, "1"); err != nil {
+		return fmt.Errorf("write %s marker: %w", markerKey, err)
+	}
+	return nil
+}
+
 func (c *Catalog) clearVolatileOneDriveThumbnails(ctx context.Context) error {
+	// 把 OneDrive 过期的 mediap.svc.ms thumb URL 清空，让 worker 重新抽帧生成本地封面。
+	// 同步把 thumbnail_status 重置为 'pending'：清空后 url 是空的，本应进 worker 重做，
+	// 若 status 还停留在 'ready' / 'failed' 会和 ListVideosNeedingThumbnail 的语义不一致
+	// （admin/统计按 url 看：空 + 非 'failed' = pending；status='failed' 会让重做被阻断）。
 	_, err := c.db.ExecContext(ctx, `
 UPDATE videos
    SET thumbnail_url = '',
+       thumbnail_status = 'pending',
        updated_at = ?
  WHERE lower(COALESCE(thumbnail_url, '')) LIKE 'https://%mediap.svc.ms/transform/thumbnail%'
 `, time.Now().UnixMilli())
