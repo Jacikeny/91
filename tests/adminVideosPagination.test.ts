@@ -11,3 +11,12 @@ test("admin videos page uses responsive page size", () => {
   assert.match(videosPageSource, /window\.matchMedia\(VIDEOS_MOBILE_QUERY\)/);
   assert.match(videosPageSource, /api\.listVideos\(\{ driveId, page, size: pageSize, keyword: searchKeyword \}\)/);
 });
+
+test("admin videos batch delete runs deletions sequentially", () => {
+  assert.match(videosPageSource, /for \(const id of ids\) \{/);
+  assert.match(videosPageSource, /const result = await api\.deleteVideo\(id\);/);
+  assert.doesNotMatch(
+    videosPageSource,
+    /Promise\.allSettled\(\s*ids\.map\(\(id\) => api\.deleteVideo\(id\)\)\s*\)/
+  );
+});

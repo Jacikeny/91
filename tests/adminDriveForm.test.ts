@@ -10,8 +10,16 @@ const driveComponentsSource = readFileSync(
   new URL("../src/admin/drive/DriveComponents.tsx", import.meta.url),
   "utf8"
 );
+const spider91UploadTargetSource = readFileSync(
+  new URL("../src/admin/drive/Spider91UploadTargetField.tsx", import.meta.url),
+  "utf8"
+);
 const driveFormSource = readFileSync(
   new URL("../src/admin/drive/DriveForm.tsx", import.meta.url),
+  "utf8"
+);
+const adminCss = readFileSync(
+  new URL("../src/styles/admin.css", import.meta.url),
   "utf8"
 );
 const apiSource = readFileSync(
@@ -23,10 +31,7 @@ const constantsSource = readFileSync(
   "utf8"
 );
 
-const combinedSource = drivesPageSource + "\n" + driveFormSource + "\n" + constantsSource + "\n" + readFileSync(
-  new URL("../src/admin/drive/Spider91UploadTargetField.tsx", import.meta.url),
-  "utf8"
-);
+const combinedSource = drivesPageSource + "\n" + driveFormSource + "\n" + constantsSource + "\n" + spider91UploadTargetSource;
 
 function driveTypeOptions() {
   const match = /const DRIVE_OPTIONS:\s*DriveOption\[]\s*=\s*\[([\s\S]*?)\];/.exec(
@@ -49,7 +54,7 @@ function assertDriveTypeOption(value: string, label: string) {
 test("spider91 drive form does not expose advanced crawler credentials", () => {
   assert.match(combinedSource, /key: "proxy"/);
   assert.match(combinedSource, /label: "代理地址（可选）"/);
-  assert.match(combinedSource, /支持 http:\/\/、https:\/\/、socks5:\/\/ 或 socks5h:\/\//);
+  assert.match(combinedSource, /支持 http:\/\/、https:\/\/、socks5:\/\/、socks5h:\/\/代理/);
   assert.doesNotMatch(combinedSource, /target_new/);
   assert.doesNotMatch(combinedSource, /crawl_hour/);
   assert.doesNotMatch(combinedSource, /python_path/);
@@ -64,6 +69,18 @@ test("spider91 upload target uses explicit local-save option instead of auto tar
   );
   assert.doesNotMatch(combinedSource, /自动：唯一/);
   assert.doesNotMatch(combinedSource, /自动模式/);
+  assert.doesNotMatch(combinedSource, /较早的视频会上传到该云盘根目录下的 91 Spider 文件夹/);
+});
+
+test("spider91 upload target select uses an aligned custom arrow", () => {
+  assert.match(spider91UploadTargetSource, /className="admin-form-select-wrap"/);
+  assert.match(spider91UploadTargetSource, /className="admin-form-select"/);
+  assert.match(spider91UploadTargetSource, /className="admin-form-select__icon"/);
+  assert.match(adminCss, /\.admin-form__row \.admin-form-select\s*\{[^}]*appearance\s*:\s*none/s);
+  assert.match(
+    adminCss,
+    /\.admin-form-select__icon\s*\{[^}]*top\s*:\s*50%[^}]*right\s*:\s*12px[^}]*transform\s*:\s*translateY\(-50%\)/s
+  );
 });
 
 test("drive form hides root directory id for localstorage and spider91", () => {

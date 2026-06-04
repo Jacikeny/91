@@ -264,7 +264,7 @@ export function credentialFields(kind: Kind): Array<{
           key: "proxy",
           label: "代理地址（可选）",
           placeholder: "http://127.0.0.1:7890",
-          help: "仅用于 91Spider 的列表/详情请求和视频、封面下载；留空则使用服务器环境变量 HTTP_PROXY / HTTPS_PROXY 或直连。支持 http://、https://、socks5:// 或 socks5h://。",
+          help: "支持 http://、https://、socks5://、socks5h://代理",
         },
       ];
   }

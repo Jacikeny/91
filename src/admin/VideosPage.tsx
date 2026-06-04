@@ -152,15 +152,16 @@ export function VideosPage() {
     if (ids.length === 0) return;
     setBatchDeleting(true);
     try {
-      const results = await Promise.allSettled(
-        ids.map((id) => api.deleteVideo(id))
-      );
       let success = 0;
       let deletedSources = 0;
-      for (const r of results) {
-        if (r.status !== "fulfilled") continue;
-        success++;
-        if (r.value.deletedSource) deletedSources++;
+      for (const id of ids) {
+        try {
+          const result = await api.deleteVideo(id);
+          success++;
+          if (result.deletedSource) deletedSources++;
+        } catch {
+          // Keep deleting the rest of the selected videos; report aggregate failure below.
+        }
       }
       const failed = ids.length - success;
       if (failed === 0) {
