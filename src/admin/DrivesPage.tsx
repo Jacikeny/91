@@ -708,7 +708,7 @@ export function DrivesPage() {
         </div>
       ) : list.length === 0 ? (
         <div className="admin-card admin-empty">
-          还没有配置任何网盘。点击右上角「新建」，选择夸克 / 115 / PikPak / 沃盘 / OneDrive / 本地存储，填入凭证或路径即可。
+          当前还没有配置任何网盘
         </div>
       ) : (
         <div className="admin-drives-grid">

@@ -147,6 +147,9 @@
 
 .admin-sidebar__check-update:disabled svg {
   animation: admin-update-spin 0.9s linear infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+  will-change: transform;
 }
 
 @keyframes admin-update-spin {
@@ -1115,6 +1118,16 @@
 
 .admin-spin {
   animation: admin-update-spin 0.9s linear infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-sidebar__check-update:disabled svg,
+  .admin-spin {
+    animation-duration: 0.9s !important;
+  }
 }
 
 .admin-table-checkbox-btn {

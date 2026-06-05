@@ -100,6 +100,17 @@ test("admin video bulk actions use semantic theme colors", () => {
   assert.doesNotMatch(bulkBodies, /#ff5b8a|#fff6f9|rgba\(255,\s*91,\s*138/);
 });
 
+test("admin loading spinner rotates around icon center", () => {
+  const spinner = ruleBody(adminCss, ".admin-spin");
+  const reducedMotion = ruleBodyByContains(adminCss, ".admin-sidebar__check-update:disabled svg");
+
+  assert.match(spinner, /animation\s*:\s*admin-update-spin\s+0\.9s\s+linear\s+infinite/);
+  assert.match(spinner, /transform-box\s*:\s*fill-box/);
+  assert.match(spinner, /transform-origin\s*:\s*center/);
+  assert.match(spinner, /will-change\s*:\s*transform/);
+  assert.match(reducedMotion, /animation-duration\s*:\s*0\.9s\s*!important/);
+});
+
 test("mobile video management uses compact theme-aware video cards", () => {
   const css = mobileCss();
   const card = ruleBody(css, ".admin-videos-table:not(.admin-drives-table) tr");
