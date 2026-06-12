@@ -11,6 +11,7 @@ import (
 	"io"
 	"math/rand/v2"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -146,7 +147,7 @@ func (s *Server) RegisterRoutes(r chi.Router, a *auth.Authenticator) {
 		r.Post("/api/shorts/next", s.handleShortsNext)
 
 		// 代理路由同样需要鉴权，防止绕过
-		r.Get("/p/stream/{driveID}/{fileID}", s.handleStream)
+		r.Get("/p/stream/{driveID}/*", s.handleStream)
 		r.Get("/p/upload/{videoID}", s.handleUploadedVideo)
 		r.Get("/p/spider91/{videoID}", s.handleSpider91Video)
 		r.Get("/p/preview/{videoID}", s.handlePreview)
@@ -313,7 +314,7 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleVideoDetail(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := routeParam(r, "id")
 	v, err := s.Catalog.GetVideo(r.Context(), id)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
@@ -343,7 +344,7 @@ func (s *Server) handleVideoDetail(w http.ResponseWriter, r *http.Request) {
 		VideoSrc:    s.videoSource(v),
 		Poster:      thumbnailURL(v),
 		Description: v.Description,
-		EmbedURL:    fmt.Sprintf(`<iframe src="/embed/%s" width="640" height="360" frameborder="0" allowfullscreen></iframe>`, v.ID),
+		EmbedURL:    fmt.Sprintf(`<iframe src="/embed/%s" width="640" height="360" frameborder="0" allowfullscreen></iframe>`, pathSegment(v.ID)),
 		AuthorProfile: AuthorProfile{
 			ID:     "author-" + v.Author,
 			Name:   v.Author,
@@ -622,7 +623,7 @@ type updateVideoTagsReq struct {
 }
 
 func (s *Server) handleUpdateVideoTags(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := routeParam(r, "id")
 	var body updateVideoTagsReq
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
@@ -645,7 +646,7 @@ func (s *Server) handleUpdateVideoTags(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleLike(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := routeParam(r, "id")
 	likes, err := s.Catalog.IncrementLike(r.Context(), id)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
@@ -657,7 +658,7 @@ func (s *Server) handleLike(w http.ResponseWriter, r *http.Request) {
 // handleUnlike 取消点赞：likes - 1（保底 0）。
 // 短视频模式中爱心按钮点击切换状态时使用。
 func (s *Server) handleUnlike(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := routeParam(r, "id")
 	likes, err := s.Catalog.DecrementLike(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -671,7 +672,7 @@ func (s *Server) handleUnlike(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleView(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := routeParam(r, "id")
 	views, err := s.Catalog.IncrementView(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -685,7 +686,7 @@ func (s *Server) handleView(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHideVideo(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
+	id := routeParam(r, "id")
 	if err := s.Catalog.HideVideo(r.Context(), id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeErr(w, http.StatusNotFound, err)
@@ -802,12 +803,12 @@ func (s *Server) handleUploadVideo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
-	driveID := chi.URLParam(r, "driveID")
-	fileID := chi.URLParam(r, "fileID")
+	driveID := routeParam(r, "driveID")
+	fileID := routeWildcardParam(r, "*")
 	s.Proxy.ServeStream(w, r, driveID, fileID)
 }
 func (s *Server) handleUploadedVideo(w http.ResponseWriter, r *http.Request) {
-	videoID := chi.URLParam(r, "videoID")
+	videoID := routeParam(r, "videoID")
 	v, err := s.Catalog.GetVideo(r.Context(), videoID)
 	if err != nil || v.Hidden || v.DriveID != localUploadDriveID {
 		http.NotFound(w, r)
@@ -831,7 +832,7 @@ func (s *Server) handleUploadedVideo(w http.ResponseWriter, r *http.Request) {
 // 路径形如 /p/spider91/<videoID>，videoID = "spider91-<driveID>-<sourceID>"。
 // 通过 catalog 拿到 file_id（"<sourceID>.mp4"），再让 driver 解析到绝对路径并 ServeFile。
 func (s *Server) handleSpider91Video(w http.ResponseWriter, r *http.Request) {
-	videoID := chi.URLParam(r, "videoID")
+	videoID := routeParam(r, "videoID")
 	v, err := s.Catalog.GetVideo(r.Context(), videoID)
 	if err != nil || v.Hidden {
 		http.NotFound(w, r)
@@ -866,7 +867,7 @@ func (s *Server) handleSpider91Video(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
-	videoID := chi.URLParam(r, "videoID")
+	videoID := routeParam(r, "videoID")
 	v, err := s.Catalog.GetVideo(r.Context(), videoID)
 	if err != nil {
 		http.NotFound(w, r)
@@ -891,7 +892,7 @@ func (s *Server) handlePreview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleThumb(w http.ResponseWriter, r *http.Request) {
-	videoID := chi.URLParam(r, "videoID")
+	videoID := routeParam(r, "videoID")
 	var clean string
 	for _, path := range mediaasset.ThumbnailPathCandidates(s.LocalDir, videoID) {
 		candidate := filepath.Clean(path)
@@ -926,7 +927,7 @@ func mapVideo(v *catalog.Video) VideoDTO {
 	}
 	return VideoDTO{
 		ID:              v.ID,
-		Href:            "/video/" + v.ID,
+		Href:            "/video/" + pathSegment(v.ID),
 		Title:           v.Title,
 		Thumbnail:       thumbnailURL(v),
 		PreviewSrc:      previewURL(v),
@@ -948,7 +949,7 @@ func mapVideo(v *catalog.Video) VideoDTO {
 }
 
 func previewURL(v *catalog.Video) string {
-	base := "/p/preview/" + v.ID
+	base := "/p/preview/" + pathSegment(v.ID)
 	if v.UpdatedAt.IsZero() {
 		return base
 	}
@@ -956,9 +957,12 @@ func previewURL(v *catalog.Video) string {
 }
 
 func thumbnailURL(v *catalog.Video) string {
-	base := "/p/thumb/" + v.ID
+	base := "/p/thumb/" + pathSegment(v.ID)
 	if v.ThumbnailURL != "" {
 		base = v.ThumbnailURL
+		if thumbnailURLMatchesVideoID(base, v.ID) {
+			base = "/p/thumb/" + pathSegment(v.ID)
+		}
 	}
 	if !strings.HasPrefix(base, "/p/thumb/") || v.UpdatedAt.IsZero() {
 		return base
@@ -968,23 +972,68 @@ func thumbnailURL(v *catalog.Video) string {
 
 func (s *Server) videoSource(v *catalog.Video) string {
 	if v.DriveID == localUploadDriveID {
-		return "/p/upload/" + v.ID
+		return "/p/upload/" + pathSegment(v.ID)
 	}
 	if s.Proxy != nil && s.Proxy.Registry != nil {
-		if d, ok := s.Proxy.Registry.Get(v.DriveID); ok && d.Kind() == spider91.Kind {
-			return "/p/spider91/" + v.ID
+		if d, ok := s.Proxy.Registry.Get(v.DriveID); ok {
+			switch d.Kind() {
+			case spider91.Kind:
+				return "/p/spider91/" + pathSegment(v.ID)
+			}
 		}
 	}
-	return fmt.Sprintf("/p/stream/%s/%s", v.DriveID, v.FileID)
+	return fmt.Sprintf("/p/stream/%s/%s", pathSegment(v.DriveID), pathSegment(v.FileID))
 }
 
 // videoSource 兼容旧调用点，没有 server context 时按之前逻辑回退到 /p/stream。
 // 内部新增的代码请使用 (*Server).videoSource。
 func videoSource(v *catalog.Video) string {
 	if v.DriveID == localUploadDriveID {
-		return "/p/upload/" + v.ID
+		return "/p/upload/" + pathSegment(v.ID)
 	}
-	return fmt.Sprintf("/p/stream/%s/%s", v.DriveID, v.FileID)
+	return fmt.Sprintf("/p/stream/%s/%s", pathSegment(v.DriveID), pathSegment(v.FileID))
+}
+
+func pathSegment(value string) string {
+	return url.PathEscape(value)
+}
+
+func routeParam(r *http.Request, key string) string {
+	value := chi.URLParam(r, key)
+	if value == "" {
+		return ""
+	}
+	if decoded, err := url.PathUnescape(value); err == nil {
+		return decoded
+	}
+	return value
+}
+
+func routeWildcardParam(r *http.Request, key string) string {
+	value := chi.URLParam(r, key)
+	if value == "" {
+		return ""
+	}
+	value = strings.TrimPrefix(value, "/")
+	if decoded, err := url.PathUnescape(value); err == nil {
+		return decoded
+	}
+	return value
+}
+
+func thumbnailURLMatchesVideoID(value, videoID string) bool {
+	if !strings.HasPrefix(value, "/p/thumb/") {
+		return false
+	}
+	tail := strings.TrimPrefix(value, "/p/thumb/")
+	if idx := strings.IndexByte(tail, '?'); idx >= 0 {
+		tail = tail[:idx]
+	}
+	if tail == videoID {
+		return true
+	}
+	decoded, err := url.PathUnescape(tail)
+	return err == nil && decoded == videoID
 }
 
 func driveKindLabel(kind string) string {
@@ -994,11 +1043,11 @@ func driveKindLabel(kind string) string {
 	case "p115":
 		return "115 网盘"
 	case "p123":
-		return "123 云盘"
+		return "123网盘"
 	case "pikpak":
 		return "PikPak"
 	case "wopan":
-		return "联通沃盘"
+		return "联通网盘"
 	case "onedrive":
 		return "OneDrive"
 	case "googledrive":

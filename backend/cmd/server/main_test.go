@@ -1337,6 +1337,59 @@ func TestDeleteVideoRemovesSourceFileWhenRequested(t *testing.T) {
 	}
 }
 
+func TestDeleteVideoUsesSourceRemoverWithCatalogMetadata(t *testing.T) {
+	ctx := context.Background()
+	cat, err := catalog.Open(filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatalf("open catalog: %v", err)
+	}
+	t.Cleanup(func() { _ = cat.Close() })
+
+	now := time.Now()
+	if err := cat.UpsertVideo(ctx, &catalog.Video{
+		ID:          "video-with-rich-source",
+		DriveID:     "source-drive",
+		FileID:      "source-fid",
+		ParentID:    "parent-dir",
+		FileName:    "clip.mp4",
+		Title:       "Source File",
+		Size:        123,
+		PublishedAt: now,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("seed video: %v", err)
+	}
+
+	registry := proxy.NewRegistry()
+	drv := &serverSourceRemovableFakeDrive{id: "source-drive"}
+	registry.Set(drv.ID(), drv)
+	app := &App{
+		cfg:      &config.Config{Storage: config.Storage{LocalPreviewDir: filepath.Join(t.TempDir(), "previews")}},
+		cat:      cat,
+		registry: registry,
+	}
+	result, err := app.deleteVideo(ctx, "video-with-rich-source", true)
+	if err != nil {
+		t.Fatalf("delete video: %v", err)
+	}
+	if !result.OK || !result.DeletedSource {
+		t.Fatalf("delete result = %#v, want source deleted", result)
+	}
+	if drv.fallbackRemoveCalled {
+		t.Fatal("fallback Remove was called, want SourceRemover")
+	}
+	want := drives.SourceFile{
+		FileID:   "source-fid",
+		ParentID: "parent-dir",
+		Name:     "clip.mp4",
+		Size:     123,
+	}
+	if drv.removedSource != want {
+		t.Fatalf("removed source = %#v, want %#v", drv.removedSource, want)
+	}
+}
+
 func TestDeleteVideoRemovesSpider91SourceFile(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
@@ -1820,6 +1873,30 @@ func (d *serverRemovableFakeDrive) Remove(ctx context.Context, fileID string) er
 		return err
 	}
 	d.removedFileID = fileID
+	return nil
+}
+
+type serverSourceRemovableFakeDrive struct {
+	serverFakeDrive
+	id                   string
+	removedSource        drives.SourceFile
+	fallbackRemoveCalled bool
+}
+
+func (d *serverSourceRemovableFakeDrive) Kind() string { return "fake-source-removable" }
+func (d *serverSourceRemovableFakeDrive) ID() string   { return d.id }
+func (d *serverSourceRemovableFakeDrive) RemoveSource(ctx context.Context, source drives.SourceFile) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	d.removedSource = source
+	return nil
+}
+func (d *serverSourceRemovableFakeDrive) Remove(ctx context.Context, fileID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	d.fallbackRemoveCalled = true
 	return nil
 }
 

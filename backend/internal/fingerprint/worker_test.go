@@ -113,6 +113,24 @@ func TestComputeRemoteGoogleQuotaExceededReturnsRateLimit(t *testing.T) {
 	}
 }
 
+func TestWopanRemoteRangeErrorsLookRateLimited(t *testing.T) {
+	for _, tc := range []struct {
+		rawURL string
+		status int
+	}{
+		{rawURL: "https://gxdownload.pan.wo.cn:8445/openapi/download?fid=encoded", status: http.StatusForbidden},
+		{rawURL: "https://du.smartont.net:8445/openapi/download?fid=encoded", status: http.StatusServiceUnavailable},
+		{rawURL: "https://du.smartont.net:8445/openapi/download?fid=encoded", status: 509},
+	} {
+		if !remoteRangeResponseLooksRateLimited(tc.rawURL, tc.status, nil) {
+			t.Fatalf("remoteRangeResponseLooksRateLimited(%q, %d) = false, want true", tc.rawURL, tc.status)
+		}
+	}
+	if remoteRangeResponseLooksRateLimited("https://example.com/video.mp4", http.StatusForbidden, nil) {
+		t.Fatal("generic 403 should not be treated as wopan rate limit")
+	}
+}
+
 type fakeDrive struct {
 	paths map[string]string
 }

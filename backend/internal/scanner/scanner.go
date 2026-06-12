@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log"
 	"path"
@@ -165,7 +166,7 @@ func (s *Scanner) walk(ctx context.Context, dirID, dirName string, stats *Stats,
 		progress(dirName)
 		stats.SeenFileIDs[e.ID] = struct{}{}
 
-		id := s.Drive.Kind() + "-" + s.Drive.ID() + "-" + e.ID
+		id := s.Drive.Kind() + "-" + s.Drive.ID() + "-" + videoIDFilePart(e.ID)
 		if deleted, err := s.Catalog.IsDeletedVideoCandidate(ctx, id, s.Drive.ID(), e.ID, e.Hash, e.Name, e.Size); err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
@@ -338,4 +339,11 @@ func mergeTags(lists ...[]string) []string {
 		}
 	}
 	return out
+}
+
+func videoIDFilePart(fileID string) string {
+	if !strings.ContainsAny(fileID, `/\`+"\x00") {
+		return fileID
+	}
+	return "b64_" + base64.RawURLEncoding.EncodeToString([]byte(fileID))
 }

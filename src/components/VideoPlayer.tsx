@@ -110,6 +110,7 @@ const PLAYER_GESTURE_HUD_CLASS = "video-player__art-gesture-hud";
 const PLAYER_GESTURE_HUD_ICON_CLASS = "video-player__art-gesture-hud-icon";
 const PLAYER_GESTURE_HUD_VALUE_CLASS = "video-player__art-gesture-hud-value";
 const PREVIEW_WIDTH = 168;
+const MEDIA_REFERRER_POLICY = "no-referrer";
 const BRIGHTNESS_MIN = 0.45;
 const BRIGHTNESS_MAX = 1.35;
 const GESTURE_ACTIVATION_PX = 12;
@@ -269,7 +270,28 @@ function inferSourceType(src: string) {
   const lower = src.toLowerCase();
   const cleanPath = lower.split("#")[0].split("?")[0];
   if (cleanPath.endsWith(".m3u8") || lower.includes(".m3u8")) return "m3u8";
+  if (isBackendNativeVideoRoute(cleanPath)) return "mp4";
   return undefined;
+}
+
+function isBackendNativeVideoRoute(cleanPath: string) {
+  const pathname = sourcePathname(cleanPath);
+  return (
+    pathname.startsWith("/p/stream/") ||
+    pathname.startsWith("/p/upload/") ||
+    pathname.startsWith("/p/spider91/")
+  );
+}
+
+function sourcePathname(src: string) {
+  if (src.startsWith("http://") || src.startsWith("https://")) {
+    try {
+      return new URL(src).pathname.toLowerCase();
+    } catch {
+      return src;
+    }
+  }
+  return src;
 }
 
 function mountArtPlayer({
@@ -305,7 +327,7 @@ function mountArtPlayer({
   const option: Option = {
     id: "91-detail-player",
     container: mount,
-    url: src,
+    url: "",
     poster,
     theme: "var(--video-player-progress)",
     lang: "zh-cn",
@@ -350,12 +372,14 @@ function mountArtPlayer({
   artRef.current = art;
 
   const video = art.video as VideoElementWithHls;
+  video.setAttribute("referrerpolicy", MEDIA_REFERRER_POLICY);
   video.setAttribute("aria-label", title);
   video.setAttribute("controlsList", "nodownload");
   video.setAttribute("webkit-playsinline", "true");
   video.disablePictureInPicture = false;
   video.playbackRate = settings.playbackRate;
   applyPlayerBrightness(art, settings.brightness);
+  art.url = src;
 
   function preventContextMenu(event: Event) {
     event.preventDefault();

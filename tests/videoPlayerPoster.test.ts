@@ -108,6 +108,23 @@ test("detail player uses custom mobile gestures instead of ArtPlayer native gest
   assert.match(playerSource, /addEventListener\("touchmove", handleTouchMove, \{ passive: false \}\)/);
 });
 
+test("detail player treats backend video routes as native mp4 sources", () => {
+  assert.match(playerSource, /if \(isBackendNativeVideoRoute\(cleanPath\)\) return "mp4"/);
+  assert.match(playerSource, /pathname\.startsWith\("\/p\/stream\/"\)/);
+  assert.match(playerSource, /pathname\.startsWith\("\/p\/upload\/"\)/);
+  assert.match(playerSource, /pathname\.startsWith\("\/p\/spider91\/"\)/);
+  assert.doesNotMatch(playerSource, /crossOrigin/);
+});
+
+test("detail player sets referrer policy before loading media url", () => {
+  assert.match(playerSource, /const MEDIA_REFERRER_POLICY = "no-referrer"/);
+  assert.match(playerSource, /url:\s*""/);
+  assert.match(
+    playerSource,
+    /video\.setAttribute\("referrerpolicy", MEDIA_REFERRER_POLICY\);[\s\S]*art\.url = src;/
+  );
+});
+
 test("detail player fullscreen long-press rate hint lives inside ArtPlayer", () => {
   assert.match(
     detailCss,

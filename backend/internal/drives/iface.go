@@ -46,6 +46,21 @@ type Remover interface {
 	Remove(ctx context.Context, fileID string) error
 }
 
+// SourceFile carries the catalog metadata available when an administrator
+// requests deletion of the original source file.
+type SourceFile struct {
+	FileID   string
+	ParentID string
+	Name     string
+	Size     int64
+}
+
+// SourceRemover is an optional, richer removal capability for providers whose
+// playback ID is not the same ID required by their delete API.
+type SourceRemover interface {
+	RemoveSource(ctx context.Context, source SourceFile) error
+}
+
 type Entry struct {
 	ID       string
 	Name     string

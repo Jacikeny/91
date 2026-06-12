@@ -24,6 +24,7 @@ import (
 	"github.com/video-site/backend/internal/drives/p123"
 	"github.com/video-site/backend/internal/drives/scriptcrawler"
 	"github.com/video-site/backend/internal/drives/spider91"
+	"github.com/video-site/backend/internal/drives/wopan"
 )
 
 type AdminServer struct {
@@ -67,7 +68,7 @@ type AdminServer struct {
 	// Theme 读写（"dark" | "pink"）
 	GetTheme func() string
 	SetTheme func(theme string) error
-	// Spider91 → 115/123/PikPak/OneDrive 上传目标 drive ID 读写
+	// Spider91 → 115/123/PikPak/OneDrive/Google Drive/联通网盘 上传目标 drive ID 读写
 	GetSpider91UploadDriveID func() string
 	SetSpider91UploadDriveID func(driveID string) error
 	// OnRunNightlyJob 触发一次完整的凌晨流水线（Phase1 扫盘 + Phase2 91 爬虫 +
@@ -81,9 +82,12 @@ type AdminServer struct {
 	// 用于"设置跳过目录"弹窗按需展开浏览网盘目录树；只返回目录条目，文件忽略。
 	// 调用方应当处理 error 并以 5xx 返回前端。
 	ListDriveDirChildren func(ctx context.Context, driveID, parentID string) ([]DriveDirEntry, error)
-	// 123 云盘扫码登录接口测试注入；生产留空走官方 user.123pan.cn。
+	// 123网盘扫码登录接口测试注入；生产留空走官方 user.123pan.cn。
 	P123UserAPIBaseURL string
 	P123HTTPClient     *http.Client
+	// 联通网盘扫码登录接口测试注入；生产留空走官方 panservice.mail.wo.cn。
+	WopanQRAPIBaseURL string
+	WopanQRHTTPClient *http.Client
 }
 
 const (
@@ -154,6 +158,8 @@ func (a *AdminServer) Register(r chi.Router) {
 			r.Post("/drives", a.handleUpsertDrive)
 			r.Post("/drives/p123/qr", a.handleP123QRStart)
 			r.Get("/drives/p123/qr/{uniID}", a.handleP123QRStatus)
+			r.Post("/drives/wopan/qr", a.handleWopanQRStart)
+			r.Get("/drives/wopan/qr/{uuid}", a.handleWopanQRStatus)
 			r.Delete("/drives/{id}", a.handleDeleteDrive)
 			r.Post("/drives/{id}/rescan", a.handleRescan)
 			r.Post("/drives/{id}/tasks/stop", a.handleStopDriveTasks)
@@ -888,14 +894,14 @@ func (a *AdminServer) validateCrawlerUploadDrive(ctx context.Context, driveID st
 		return fmt.Errorf("上传目标网盘 %q 不存在", driveID)
 	}
 	if !isCrawlerUploadTargetKind(d.Kind) {
-		return fmt.Errorf("上传目标网盘 %q 类型为 %s，仅支持 115网盘、PikPak、123网盘、Google Drive、OneDrive", driveID, d.Kind)
+		return fmt.Errorf("上传目标网盘 %q 类型为 %s，仅支持 115网盘、PikPak、123网盘、Google Drive、OneDrive、联通网盘", driveID, d.Kind)
 	}
 	return nil
 }
 
 func isCrawlerUploadTargetKind(kind string) bool {
 	switch strings.TrimSpace(kind) {
-	case "p115", "pikpak", "p123", "googledrive", "onedrive":
+	case "p115", "pikpak", "p123", "googledrive", "onedrive", "wopan":
 		return true
 	default:
 		return false
@@ -1566,6 +1572,38 @@ func (a *AdminServer) handleP123QRStatus(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	status, err := a.p123QRClient().Poll(r.Context(), loginUUID, uniID)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, status)
+}
+
+func (a *AdminServer) wopanQRClient() *wopan.QRClient {
+	return wopan.NewQRClient(wopan.QRConfig{
+		APIBaseURL: a.WopanQRAPIBaseURL,
+		HTTPClient: a.WopanQRHTTPClient,
+	})
+}
+
+func (a *AdminServer) handleWopanQRStart(w http.ResponseWriter, r *http.Request) {
+	session, err := a.wopanQRClient().Generate(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, session)
+}
+
+func (a *AdminServer) handleWopanQRStatus(w http.ResponseWriter, r *http.Request) {
+	uuid := chi.URLParam(r, "uuid")
+	if strings.TrimSpace(uuid) == "" {
+		http.Error(w, "uuid is required", http.StatusBadRequest)
+		return
+	}
+	status, err := a.wopanQRClient().Poll(r.Context(), uuid)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err)
 		return

@@ -19,6 +19,7 @@ import (
 	"github.com/video-site/backend/internal/drives/pikpak"
 	"github.com/video-site/backend/internal/drives/scriptcrawler"
 	"github.com/video-site/backend/internal/drives/spider91"
+	"github.com/video-site/backend/internal/drives/wopan"
 )
 
 // fakeRegistry 是 Registry 接口的最小实现。
@@ -1447,7 +1448,23 @@ func TestAdaptUploadTargetSupportsGoogleDriveDriver(t *testing.T) {
 	}
 }
 
-// TestResolveTargetRejectsUnsupportedKind 验证当目标 drive 既不是 PikPak、115、123、OneDrive 也不是 Google Drive 时，
+func TestAdaptUploadTargetSupportsWopanDriver(t *testing.T) {
+	d := wopan.New(wopan.Config{
+		ID:           "wopan-target",
+		RootID:       "root-wopan",
+		AccessToken:  "access-token",
+		RefreshToken: "refresh-token",
+	})
+	target, err := adaptUploadTarget(d)
+	if err != nil {
+		t.Fatalf("adaptUploadTarget() error = %v", err)
+	}
+	if target.ID() != "wopan-target" || target.Kind() != "wopan" || target.RootID() != "root-wopan" {
+		t.Fatalf("target id/kind/root = %q/%q/%q, want wopan-target/wopan/root-wopan", target.ID(), target.Kind(), target.RootID())
+	}
+}
+
+// TestResolveTargetRejectsUnsupportedKind 验证当目标 drive 既不是 PikPak、115、123、OneDrive、Google Drive 也不是联通网盘时，
 // resolveTarget 拒绝并返回 error，让 runOnce 静默跳过（不会做破坏性变更）。
 func TestResolveTargetRejectsUnsupportedKind(t *testing.T) {
 	cat := setupCatalog(t)

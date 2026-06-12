@@ -1432,7 +1432,10 @@ func (w *Worker) pauseForRateLimit(err error, step, title string) bool {
 		return false
 	}
 	if wait <= 0 {
-		wait = defaultGenerationRateLimitCooldown
+		wait = w.RateLimitCooldown
+		if wait <= 0 {
+			wait = defaultGenerationRateLimitCooldown
+		}
 	}
 	until := w.rateLimit.pause(time.Now(), wait)
 	log.Printf("[preview] drive=%s rate-limited until=%s step=%s video=%s: %v", w.Drive.ID(), until.Format(time.RFC3339), step, title, err)
@@ -1468,7 +1471,10 @@ func (w *ThumbWorker) pauseForRateLimit(err error, step, title string) bool {
 		return false
 	}
 	if wait <= 0 {
-		wait = defaultGenerationRateLimitCooldown
+		wait = w.RateLimitCooldown
+		if wait <= 0 {
+			wait = defaultGenerationRateLimitCooldown
+		}
 	}
 	until := w.rateLimit.pause(time.Now(), wait)
 	log.Printf("[thumb] drive=%s rate-limited until=%s step=%s video=%s: %v", w.Drive.ID(), until.Format(time.RFC3339), step, title, err)
@@ -1544,7 +1550,7 @@ func driveErrorShouldCooldown(d drives.Drive, err error) bool {
 			strings.Contains(text, "partial file") ||
 			strings.Contains(text, "service unavailable")
 	case "p123":
-		// 123 云盘直链解析 / ffmpeg 读取阶段可能返回 429、5xx，或 WAF 类
+		// 123网盘直链解析 / ffmpeg 读取阶段可能返回 429、5xx，或 WAF 类
 		// blocked / 访问阻断文本。命中时冷却，避免封面和预览视频生成连续打接口。
 		text := strings.ToLower(err.Error())
 		return strings.Contains(text, "请求太频繁") ||
@@ -1565,6 +1571,43 @@ func driveErrorShouldCooldown(d drives.Drive, err error) bool {
 			strings.Contains(text, "rate limit") ||
 			strings.Contains(text, "blocked") ||
 			strings.Contains(text, "访问被阻断") ||
+			strings.Contains(text, "service unavailable")
+	case "wopan":
+		// 联通网盘的取链接口和下载直链都可能返回"操作频繁"、429、5xx
+		// 或 WAF 阻断文本。封面/预览失败时先冷却，避免持续触发风控。
+		text := strings.ToLower(err.Error())
+		return strings.Contains(text, "请求太频繁") ||
+			strings.Contains(text, "请求过于频繁") ||
+			strings.Contains(text, "请求频繁") ||
+			strings.Contains(text, "操作频繁") ||
+			strings.Contains(text, "频率限制") ||
+			strings.Contains(text, "请求次数过多") ||
+			strings.Contains(text, "系统繁忙") ||
+			strings.Contains(text, "服务繁忙") ||
+			strings.Contains(text, "稍后再试") ||
+			strings.Contains(text, "稍后重试") ||
+			strings.Contains(text, "429") ||
+			strings.Contains(text, "http 500") ||
+			strings.Contains(text, "http 502") ||
+			strings.Contains(text, "http 503") ||
+			strings.Contains(text, "http 504") ||
+			strings.Contains(text, "http 509") ||
+			strings.Contains(text, "server returned 403") ||
+			strings.Contains(text, "403 forbidden") ||
+			strings.Contains(text, "server returned 429") ||
+			strings.Contains(text, "server returned 500") ||
+			strings.Contains(text, "server returned 502") ||
+			strings.Contains(text, "server returned 503") ||
+			strings.Contains(text, "server returned 504") ||
+			strings.Contains(text, "too many request") ||
+			strings.Contains(text, "too many requests") ||
+			strings.Contains(text, "rate limit") ||
+			strings.Contains(text, "rate-limit") ||
+			strings.Contains(text, "throttl") ||
+			strings.Contains(text, "blocked") ||
+			strings.Contains(text, "request has been blocked") ||
+			strings.Contains(text, "访问被阻断") ||
+			strings.Contains(text, "风控") ||
 			strings.Contains(text, "service unavailable")
 	case "googledrive":
 		// Google Drive 下载/取样阶段常把频控和配额问题包装成 403，

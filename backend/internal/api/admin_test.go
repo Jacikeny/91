@@ -1270,6 +1270,7 @@ func TestHandleUpsertCrawlerPersistsAndValidatesUploadDrive(t *testing.T) {
 	}
 	for _, d := range []*catalog.Drive{
 		{ID: "p115-target", Kind: "p115", Name: "115", RootID: "0", Credentials: map[string]string{"cookie": "x"}},
+		{ID: "wopan-target", Kind: "wopan", Name: "沃盘", RootID: "0", Credentials: map[string]string{"access_token": "a", "refresh_token": "r"}},
 		{ID: "local-target", Kind: "localstorage", Name: "Local", RootID: "/", Credentials: map[string]string{"path": tmp}},
 	} {
 		if err := cat.UpsertDrive(ctx, d); err != nil {
@@ -1294,6 +1295,24 @@ func TestHandleUpsertCrawlerPersistsAndValidatesUploadDrive(t *testing.T) {
 	}
 	if got.Credentials["upload_drive_id"] != "p115-target" {
 		t.Fatalf("upload_drive_id = %q, want p115-target", got.Credentials["upload_drive_id"])
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/admin/api/crawlers", strings.NewReader(`{
+		"id": "crawler-upload",
+		"scriptPath": "`+scriptPath+`",
+		"uploadDriveId": "wopan-target"
+	}`))
+	rr = httptest.NewRecorder()
+	srv.handleUpsertCrawler(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("wopan target status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	got, err = cat.GetDrive(ctx, "crawler-upload")
+	if err != nil {
+		t.Fatalf("get crawler after wopan target: %v", err)
+	}
+	if got.Credentials["upload_drive_id"] != "wopan-target" {
+		t.Fatalf("upload_drive_id = %q, want wopan-target", got.Credentials["upload_drive_id"])
 	}
 
 	req = httptest.NewRequest(http.MethodPost, "/admin/api/crawlers", strings.NewReader(`{
@@ -1602,6 +1621,86 @@ func TestHandleImportCrawlerScriptURLRejectsNonPython(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), ".py") {
 		t.Fatalf("body = %s, want .py error", rr.Body.String())
+	}
+}
+
+func TestHandleWopanQRStart(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path != "/QRCode/generate" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"meta": map[string]string{"code": "0000", "message": "ok"},
+			"result": map[string]string{
+				"uuid":  "uuid-1",
+				"image": "iVBORw0KGgo=",
+			},
+		})
+	}))
+	t.Cleanup(upstream.Close)
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/api/drives/wopan/qr", nil)
+	rr := httptest.NewRecorder()
+	(&AdminServer{WopanQRAPIBaseURL: upstream.URL + "/QRCode"}).handleWopanQRStart(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	var got struct {
+		UUID           string `json:"uuid"`
+		QRImageDataURL string `json:"qrImageDataUrl"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.UUID != "uuid-1" || got.QRImageDataURL != "data:image/png;base64,iVBORw0KGgo=" {
+		t.Fatalf("response = %#v", got)
+	}
+}
+
+func TestHandleWopanQRStatus(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path != "/QRCode/query" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.URL.Query().Get("uuid") != "uuid-1" {
+			t.Fatalf("uuid = %q, want uuid-1", r.URL.Query().Get("uuid"))
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"meta": map[string]string{"code": "0000", "message": "ok"},
+			"result": map[string]any{
+				"state":        3,
+				"token":        "access-1",
+				"refreshToken": "refresh-1",
+			},
+		})
+	}))
+	t.Cleanup(upstream.Close)
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/api/drives/wopan/qr/uuid-1", nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("uuid", "uuid-1")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	rr := httptest.NewRecorder()
+	(&AdminServer{WopanQRAPIBaseURL: upstream.URL + "/QRCode"}).handleWopanQRStatus(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	var got struct {
+		State        int    `json:"state"`
+		AccessToken  string `json:"accessToken"`
+		RefreshToken string `json:"refreshToken"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.State != 3 || got.AccessToken != "access-1" || got.RefreshToken != "refresh-1" {
+		t.Fatalf("response = %#v", got)
 	}
 }
 

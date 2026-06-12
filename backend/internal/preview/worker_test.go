@@ -661,6 +661,23 @@ func TestP123TransientErrorsShouldCooldown(t *testing.T) {
 	}
 }
 
+func TestWopanTransientErrorsShouldCooldown(t *testing.T) {
+	drv := &previewFakeDrive{kind: "wopan"}
+	for _, err := range []error{
+		errors.New("ffmpeg: Server returned 403 Forbidden"),
+		errors.New("wopan download url: request failed with status: 429 Too Many Requests"),
+		errors.New("操作频繁，请稍后重试"),
+		errors.New("http 503 service unavailable"),
+	} {
+		if !driveErrorShouldCooldown(drv, err) {
+			t.Fatalf("driveErrorShouldCooldown(%v) = false, want true", err)
+		}
+	}
+	if driveErrorShouldCooldown(drv, errors.New("invalid access token")) {
+		t.Fatal("invalid access token should not trigger wopan cooldown")
+	}
+}
+
 func TestGoogleDriveMediaErrorsShouldCooldown(t *testing.T) {
 	drv := &previewFakeDrive{kind: "googledrive"}
 	for _, err := range []error{

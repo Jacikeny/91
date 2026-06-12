@@ -297,7 +297,7 @@ UPDATE videos
 }
 
 func (c *Catalog) clearRemoteP123ThumbnailsOnce(ctx context.Context) error {
-	// 123 云盘列表返回的缩略图尺寸和稳定性都不适合作为站内封面；清空历史写入的
+	// 123网盘列表返回的缩略图尺寸和稳定性都不适合作为站内封面；清空历史写入的
 	// 远程 URL，让封面 worker 统一从视频直链抽帧生成本地 /p/thumb/<id>。
 	const markerKey = "videos.p123.remote_thumbnails_cleared"
 	marker, err := c.GetSetting(ctx, markerKey, "")

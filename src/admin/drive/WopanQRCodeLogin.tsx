@@ -3,22 +3,28 @@ import { QrCode } from "lucide-react";
 import * as api from "../api";
 import { useToast } from "../ToastContext";
 
-function p123QRStatusClass(
-  status: api.P123QRStatus | null,
+function wopanQRStatusClass(
+  status: api.WopanQRStatus | null,
   completed: boolean,
   error: string
 ): string {
-  if (completed || status?.loginStatus === 3) return "is-ok";
-  if (error || status?.loginStatus === 2 || status?.loginStatus === 4) {
-    return "is-error";
-  }
+  if (completed || status?.state === 3) return "is-ok";
+  if (error || status?.state === 4) return "is-error";
   return "is-pending";
 }
 
-export function P123QRCodeLogin({ onToken }: { onToken: (token: string) => void }) {
+export function WopanQRCodeLogin({
+  onCredentials,
+}: {
+  onCredentials: (credentials: {
+    accessToken: string;
+    refreshToken: string;
+    familyID?: string;
+  }) => void;
+}) {
   const { show } = useToast();
-  const [session, setSession] = useState<api.P123QRSession | null>(null);
-  const [status, setStatus] = useState<api.P123QRStatus | null>(null);
+  const [session, setSession] = useState<api.WopanQRSession | null>(null);
+  const [status, setStatus] = useState<api.WopanQRStatus | null>(null);
   const [starting, setStarting] = useState(false);
   const [pollingError, setPollingError] = useState("");
   const [completed, setCompleted] = useState(false);
@@ -29,7 +35,7 @@ export function P123QRCodeLogin({ onToken }: { onToken: (token: string) => void 
     setCompleted(false);
     setStatus(null);
     try {
-      const next = await api.startP123QRLogin();
+      const next = await api.startWopanQRLogin();
       setSession(next);
     } catch (e) {
       setSession(null);
@@ -50,19 +56,23 @@ export function P123QRCodeLogin({ onToken }: { onToken: (token: string) => void 
       if (stopped || inFlight) return;
       inFlight = true;
       try {
-        const next = await api.getP123QRStatus(activeSession.uniID, activeSession.loginUuid);
+        const next = await api.getWopanQRStatus(activeSession.uuid);
         if (stopped) return;
         setStatus(next);
         setPollingError("");
-        if (next.accessToken) {
+        if (next.accessToken && next.refreshToken) {
           stopped = true;
           if (timer) window.clearInterval(timer);
           setCompleted(true);
-          onToken(next.accessToken);
-          show("扫码成功，已填入 access_token，保存后生效", "success");
+          onCredentials({
+            accessToken: next.accessToken,
+            refreshToken: next.refreshToken,
+            familyID: next.familyID,
+          });
+          show("扫码成功，已填入 access_token 和 refresh_token，保存后生效", "success");
           return;
         }
-        if (next.loginStatus === 2 || next.loginStatus === 4) {
+        if (next.state === 4) {
           stopped = true;
           if (timer) window.clearInterval(timer);
         }
@@ -75,18 +85,17 @@ export function P123QRCodeLogin({ onToken }: { onToken: (token: string) => void 
     }
 
     poll();
-    timer = window.setInterval(poll, 1800);
+    timer = window.setInterval(poll, 1200);
     return () => {
       stopped = true;
       if (timer) window.clearInterval(timer);
     };
-  }, [session, completed, onToken, show]);
+  }, [session, completed, onCredentials, show]);
 
   const statusText = completed
-    ? "已获取 token"
+    ? "已获取凭证"
     : pollingError || status?.statusText || (session ? "等待扫码" : "未生成二维码");
-  const statusClass = p123QRStatusClass(status, completed, pollingError);
-  const platform = status?.platformText ? ` · ${status.platformText}` : "";
+  const statusClass = wopanQRStatusClass(status, completed, pollingError);
 
   return (
     <div className="admin-form__row">
@@ -102,10 +111,7 @@ export function P123QRCodeLogin({ onToken }: { onToken: (token: string) => void 
             <QrCode size={14} />
             {starting ? "生成中..." : session ? "重新生成二维码" : "生成二维码"}
           </button>
-          <span className={`admin-status ${statusClass}`}>
-            {statusText}
-            {platform}
-          </span>
+          <span className={`admin-status ${statusClass}`}>{statusText}</span>
         </div>
 
         {session && (
@@ -113,11 +119,11 @@ export function P123QRCodeLogin({ onToken }: { onToken: (token: string) => void 
             <img
               className="admin-p123-qr__image"
               src={session.qrImageDataUrl}
-              alt="123网盘扫码登录二维码"
+              alt="联通网盘扫码登录二维码"
             />
             <div className="admin-p123-qr__meta">
               <div className="admin-form__help">
-                使用微信或 123网盘 App 扫码并确认登录；确认后系统会自动填入 access_token。
+                使用联通网盘 App 扫码并确认登录；确认后系统会自动填入 access_token 和 refresh_token。
               </div>
               {session.expiresAt && (
                 <div className="admin-form__help">
@@ -128,9 +134,9 @@ export function P123QRCodeLogin({ onToken }: { onToken: (token: string) => void 
                   })}
                 </div>
               )}
-              {(status?.loginStatus === 2 || status?.loginStatus === 4) && (
+              {status?.state === 4 && (
                 <div className="admin-form__help">
-                  当前二维码{status.loginStatus === 2 ? "已被拒绝" : "已过期"}，请重新生成。
+                  当前二维码已过期，请重新生成。
                 </div>
               )}
             </div>

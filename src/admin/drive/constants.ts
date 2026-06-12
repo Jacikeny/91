@@ -25,9 +25,9 @@ export function driveKindAbbr(kind: string): string {
 export const kindLabel: Record<string, string> = {
   quark: "夸克网盘",
   p115: "115 网盘",
-  p123: "123 云盘",
+  p123: "123网盘",
   pikpak: "PikPak",
-  wopan: "联通沃盘",
+  wopan: "联通网盘",
   onedrive: "OneDrive",
   googledrive: "Google Drive",
   localstorage: "本地存储",
@@ -150,11 +150,11 @@ export function credentialHelp(kind: Kind, isEdit: boolean): string {
     case "p115":
       return `登录 115.com 后复制 Cookie，形如 "UID=...; CID=...; SEID=...; KID=..."。${note}`;
     case "p123":
-      return `推荐使用扫码登录自动获取 access_token；账号密码登录被 123 云盘风控拦截时，也可以只填写 access_token。播放走 302 跳转到 123 云盘返回的短期 CDN 地址。${note}`;
+      return `推荐使用扫码登录自动获取 access_token；账号密码登录被 123网盘风控拦截时，也可以只填写 access_token。播放走 302 跳转到 123网盘返回的短期 CDN 地址。${note}`;
     case "pikpak":
       return `填写 PikPak 账号和密码即可。平台、设备 ID、验证码 token 和 refresh token 会由服务端自动处理并保存。${note}`;
     case "wopan":
-      return `需要 access_token 和 refresh_token。后续会加扫码/短信登录入口，第一版只能手工粘贴。${note}`;
+      return `推荐使用扫码登录自动获取 access_token 和 refresh_token；也可以手工粘贴已有凭证。${note}`;
     case "onedrive":
       return `按 OpenList 默认应用在线挂载，只需要 refresh_token；保存时会自动刷新并保存 token。${note}`;
     case "googledrive":
@@ -226,7 +226,7 @@ export function credentialFields(kind: Kind, creds: Record<string, string> = {})
         {
           key: "password",
           label: "密码（可选）",
-          placeholder: "123 云盘密码",
+          placeholder: "123网盘密码",
         },
         {
           key: "access_token",
@@ -258,6 +258,7 @@ export function credentialFields(kind: Kind, creds: Record<string, string> = {})
           label: "access_token",
           placeholder: "",
           required: true,
+          help: "扫码成功后会自动填入该字段；如果 token 过期，重新扫码后保存即可。",
         },
         {
           key: "refresh_token",

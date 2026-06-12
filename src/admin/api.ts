@@ -346,6 +346,28 @@ export function getP123QRStatus(uniID: string, loginUuid: string) {
   );
 }
 
+export type WopanQRSession = {
+  uuid: string;
+  qrImageDataUrl: string;
+  expiresAt?: string;
+};
+
+export type WopanQRStatus = {
+  state: number;
+  statusText: string;
+  accessToken?: string;
+  refreshToken?: string;
+  familyID?: string;
+};
+
+export function startWopanQRLogin() {
+  return request<WopanQRSession>("/drives/wopan/qr", { method: "POST" });
+}
+
+export function getWopanQRStatus(uuid: string) {
+  return request<WopanQRStatus>(`/drives/wopan/qr/${encodeURIComponent(uuid)}`);
+}
+
 /**
  * 切换某个云盘的预览视频生成开关。点击网盘列表里行内的 toggle 按钮时调用。
  *
@@ -541,9 +563,9 @@ export type Theme = "dark" | "pink";
 export type Settings = {
   theme: Theme;
   /**
-   * spider91 视频迁移到云盘时的目标 drive ID（必须是已挂载的 pikpak、p115、p123、onedrive 或 googledrive drive）。
+   * spider91 视频迁移到云盘时的目标 drive ID（必须是已挂载的 pikpak、p115、p123、onedrive、googledrive 或 wopan drive）。
    * - 空字符串：本地保存，不上传到云盘。
-   * - 非空：显式指定。后端会校验 drive 存在且 kind ∈ {pikpak, p115, p123, onedrive, googledrive}。
+   * - 非空：显式指定。后端会校验 drive 存在且 kind ∈ {pikpak, p115, p123, onedrive, googledrive, wopan}。
    */
   spider91UploadDriveId: string;
 };

@@ -78,8 +78,9 @@ test("spider91 upload target uses explicit local-save option instead of auto tar
   assert.match(combinedSource, /本地保存，不上传/);
   assert.match(
     combinedSource,
-    /d\.kind === "pikpak"[\s\S]*d\.kind === "p115"[\s\S]*d\.kind === "p123"[\s\S]*d\.kind === "onedrive"[\s\S]*d\.kind === "googledrive"/
+    /d\.kind === "pikpak"[\s\S]*d\.kind === "p115"[\s\S]*d\.kind === "p123"[\s\S]*d\.kind === "onedrive"[\s\S]*d\.kind === "googledrive"[\s\S]*d\.kind === "wopan"/
   );
+  assert.match(crawlerPageSource, /UPLOAD_TARGET_KINDS[\s\S]*"wopan"/);
   assert.doesNotMatch(combinedSource, /自动：唯一/);
   assert.doesNotMatch(combinedSource, /自动模式/);
   assert.doesNotMatch(combinedSource, /较早的视频会上传到该云盘根目录下的 91 Spider 文件夹/);
@@ -193,13 +194,13 @@ test("localstorage drive form asks for a server directory path", () => {
 test("drive type selector keeps primary source order", () => {
   assert.deepEqual(driveTypeOptions(), [
     { value: "p115", label: "115 网盘" },
-    { value: "p123", label: "123 云盘" },
+    { value: "p123", label: "123网盘" },
     { value: "pikpak", label: "PikPak" },
     { value: "onedrive", label: "OneDrive" },
     { value: "googledrive", label: "Google Drive" },
     { value: "localstorage", label: "本地存储" },
     { value: "quark", label: "夸克网盘" },
-    { value: "wopan", label: "联通沃盘" },
+    { value: "wopan", label: "联通网盘" },
   ]);
 });
 
