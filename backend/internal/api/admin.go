@@ -59,7 +59,13 @@ type AdminServer struct {
 	OnRegenFailedPreviews      func(driveID string)
 	OnRegenFailedThumbnails    func(driveID string)
 	OnRegenFailedFingerprints  func(driveID string)
-	OnDeleteVideo              func(ctx context.Context, videoID string, deleteSource bool) (DeleteVideoResult, error)
+	// OnStartDriveTranscode 手动开启某盘的浏览器兼容性转码任务。
+	// 返回 (是否接受, 拒绝原因)。转码从不自动运行，只能在这里手动触发；
+	// 处理完候选列表后任务自然结束。
+	OnStartDriveTranscode func(driveID string) (bool, string)
+	// OnStopDriveTranscode 手动停止某盘正在进行的转码任务。返回是否有任务被停。
+	OnStopDriveTranscode func(driveID string) bool
+	OnDeleteVideo        func(ctx context.Context, videoID string, deleteSource bool) (DeleteVideoResult, error)
 	GetDriveGenerationStatuses func() map[string]DriveGenerationStatuses
 	// OnTeaserEnabledChanged 在 per-drive 预览视频开关被切换后调用。
 	// enabled=true 时上层应该重新把 pending 预览视频入队（类似旧的全局开关从关到开）；
@@ -118,6 +124,7 @@ type DriveGenerationStatuses struct {
 	Preview     GenerationStatus `json:"preview"`
 	Fingerprint GenerationStatus `json:"fingerprint"`
 	Upload      GenerationStatus `json:"upload"`
+	Transcode   GenerationStatus `json:"transcode"`
 }
 
 type NightlyJobStatus struct {
@@ -169,6 +176,8 @@ func (a *AdminServer) Register(r chi.Router) {
 			r.Post("/drives/{id}/previews/failed/regenerate", a.handleRegenFailedPreviews)
 			r.Post("/drives/{id}/thumbnails/failed/regenerate", a.handleRegenFailedThumbnails)
 			r.Post("/drives/{id}/fingerprints/failed/regenerate", a.handleRegenFailedFingerprints)
+			r.Post("/drives/{id}/transcode/start", a.handleStartDriveTranscode)
+			r.Post("/drives/{id}/transcode/stop", a.handleStopDriveTranscode)
 
 			// 爬虫
 			r.Get("/crawlers", a.handleListCrawlers)
@@ -431,6 +440,11 @@ func (a *AdminServer) handleListDrives(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
+	transcodeCounts, err := a.Catalog.CountTranscodesByDrive(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
 	generationStatuses := map[string]DriveGenerationStatuses{}
 	if a.GetDriveGenerationStatuses != nil {
 		generationStatuses = a.GetDriveGenerationStatuses()
@@ -470,6 +484,11 @@ func (a *AdminServer) handleListDrives(w http.ResponseWriter, r *http.Request) {
 		FingerprintReadyCount         int              `json:"fingerprintReadyCount"`
 		FingerprintPendingCount       int              `json:"fingerprintPendingCount"`
 		FingerprintFailedCount        int              `json:"fingerprintFailedCount"`
+		TranscodeGenerationStatus     GenerationStatus `json:"transcodeGenerationStatus"`
+		TranscodePendingCount         int              `json:"transcodePendingCount"`
+		TranscodeReadyCount           int              `json:"transcodeReadyCount"`
+		TranscodeFailedCount          int              `json:"transcodeFailedCount"`
+		TranscodeSkippedCount         int              `json:"transcodeSkippedCount"`
 	}
 	list := make([]out, 0, len(drives))
 	for _, d := range drives {
@@ -479,6 +498,7 @@ func (a *AdminServer) handleListDrives(w http.ResponseWriter, r *http.Request) {
 		counts := teaserCounts[d.ID]
 		thumbCounts := thumbnailCounts[d.ID]
 		fingerprintCount := fingerprintCounts[d.ID]
+		transcodeCount := transcodeCounts[d.ID]
 		generation := generationStatuses[d.ID]
 		if generation.Scan.State == "" {
 			generation.Scan.State = "idle"
@@ -491,6 +511,9 @@ func (a *AdminServer) handleListDrives(w http.ResponseWriter, r *http.Request) {
 		}
 		if generation.Fingerprint.State == "" {
 			generation.Fingerprint.State = "idle"
+		}
+		if generation.Transcode.State == "" {
+			generation.Transcode.State = "idle"
 		}
 		// spider91 没有用户凭证概念；只要存在 drive 行就视为"已配置"。
 		// last_crawl_at 是后端自动写入的运行状态字段，不计入 hasCredential 判定。
@@ -537,6 +560,11 @@ func (a *AdminServer) handleListDrives(w http.ResponseWriter, r *http.Request) {
 			FingerprintReadyCount:         fingerprintCount.Ready,
 			FingerprintPendingCount:       fingerprintCount.Pending,
 			FingerprintFailedCount:        fingerprintCount.Failed,
+			TranscodeGenerationStatus:     generation.Transcode,
+			TranscodePendingCount:         transcodeCount.Pending,
+			TranscodeReadyCount:           transcodeCount.Ready,
+			TranscodeFailedCount:          transcodeCount.Failed,
+			TranscodeSkippedCount:         transcodeCount.Skipped,
 		})
 	}
 	writeJSON(w, http.StatusOK, list)
@@ -1540,6 +1568,35 @@ func (a *AdminServer) handleStopDriveTasks(w http.ResponseWriter, r *http.Reques
 	stopped := false
 	if a.OnStopDriveTasks != nil {
 		stopped = a.OnStopDriveTasks(id)
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"ok":      true,
+		"stopped": stopped,
+	})
+}
+
+// handleStartDriveTranscode 手动开启某盘的浏览器兼容性转码。
+// 转码默认不开启、从不自动运行；本接口是唯一入口。
+func (a *AdminServer) handleStartDriveTranscode(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if a.OnStartDriveTranscode == nil {
+		writeErr(w, http.StatusNotImplemented, errors.New("transcode not supported"))
+		return
+	}
+	accepted, message := a.OnStartDriveTranscode(id)
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"ok":       true,
+		"accepted": accepted,
+		"message":  message,
+	})
+}
+
+// handleStopDriveTranscode 手动停止某盘正在进行的转码任务。
+func (a *AdminServer) handleStopDriveTranscode(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	stopped := false
+	if a.OnStopDriveTranscode != nil {
+		stopped = a.OnStopDriveTranscode(id)
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"ok":      true,

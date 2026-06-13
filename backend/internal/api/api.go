@@ -970,6 +970,15 @@ func thumbnailURL(v *catalog.Video) string {
 	return base + "?v=" + strconv.FormatInt(v.UpdatedAt.UnixMilli(), 10)
 }
 
+// transcodedSource 在视频有就绪的浏览器兼容性转码产物时返回产物的播放地址。
+// 产物和原始文件在同一个 drive 上，走同一条 /p/stream 代理/302 链路。
+func transcodedSource(v *catalog.Video) (string, bool) {
+	if v.TranscodeStatus == "ready" && v.TranscodedFileID != "" && v.DriveID != localUploadDriveID {
+		return fmt.Sprintf("/p/stream/%s/%s", pathSegment(v.DriveID), pathSegment(v.TranscodedFileID)), true
+	}
+	return "", false
+}
+
 func (s *Server) videoSource(v *catalog.Video) string {
 	if v.DriveID == localUploadDriveID {
 		return "/p/upload/" + pathSegment(v.ID)
@@ -982,6 +991,9 @@ func (s *Server) videoSource(v *catalog.Video) string {
 			}
 		}
 	}
+	if src, ok := transcodedSource(v); ok {
+		return src
+	}
 	return fmt.Sprintf("/p/stream/%s/%s", pathSegment(v.DriveID), pathSegment(v.FileID))
 }
 
@@ -990,6 +1002,9 @@ func (s *Server) videoSource(v *catalog.Video) string {
 func videoSource(v *catalog.Video) string {
 	if v.DriveID == localUploadDriveID {
 		return "/p/upload/" + pathSegment(v.ID)
+	}
+	if src, ok := transcodedSource(v); ok {
+		return src
 	}
 	return fmt.Sprintf("/p/stream/%s/%s", pathSegment(v.DriveID), pathSegment(v.FileID))
 }

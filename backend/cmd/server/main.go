@@ -43,6 +43,7 @@ import (
 	"github.com/video-site/backend/internal/proxy"
 	"github.com/video-site/backend/internal/scanner"
 	"github.com/video-site/backend/internal/spider91migrate"
+	"github.com/video-site/backend/internal/transcode"
 )
 
 const fingerprintReconcileInterval = time.Minute
@@ -218,6 +219,12 @@ func main() {
 		OnRegenFailedFingerprints: func(driveID string) {
 			go app.regenFailedFingerprints(ctx, driveID)
 		},
+		OnStartDriveTranscode: func(driveID string) (bool, string) {
+			return app.startDriveTranscode(ctx, driveID)
+		},
+		OnStopDriveTranscode: func(driveID string) bool {
+			return app.stopDriveTranscode(driveID)
+		},
 		OnDeleteVideo: func(reqCtx context.Context, videoID string, deleteSource bool) (api.DeleteVideoResult, error) {
 			return app.deleteVideo(reqCtx, videoID, deleteSource)
 		},
@@ -368,6 +375,13 @@ type App struct {
 	// uploadProgress 跟踪脚本爬虫迁移到云盘时的实时上传状态。
 	uploadProgressMu sync.Mutex
 	uploadProgress   map[string]driveUploadProgress
+
+	// transcodeMu 保护 transcodeWorkers / transcodeCancels。
+	// 浏览器兼容性转码每盘最多一个任务，且只能由管理员手动开启
+	// （不随扫盘/夜间流水线自动运行），手动停止或处理完即从 map 清除。
+	transcodeMu      sync.Mutex
+	transcodeWorkers map[string]*transcode.Worker
+	transcodeCancels map[string]context.CancelFunc
 }
 
 type driveScanProgress struct {
@@ -557,7 +571,14 @@ func (a *App) driveGenerationStatuses() map[string]api.DriveGenerationStatuses {
 	}
 	a.mu.Unlock()
 
-	out := make(map[string]api.DriveGenerationStatuses, len(scanningDrives)+len(previewWorkers)+len(thumbWorkers)+len(fingerprintWorkers)+len(uploadProgresses))
+	a.transcodeMu.Lock()
+	transcodeWorkers := make(map[string]*transcode.Worker, len(a.transcodeWorkers))
+	for id, worker := range a.transcodeWorkers {
+		transcodeWorkers[id] = worker
+	}
+	a.transcodeMu.Unlock()
+
+	out := make(map[string]api.DriveGenerationStatuses, len(scanningDrives)+len(previewWorkers)+len(thumbWorkers)+len(fingerprintWorkers)+len(uploadProgresses)+len(transcodeWorkers))
 	for id, running := range scanningDrives {
 		if !running {
 			continue
@@ -599,6 +620,11 @@ func (a *App) driveGenerationStatuses() map[string]api.DriveGenerationStatuses {
 			DoneCount:    progress.DoneCount,
 			TotalCount:   progress.TotalCount,
 		}
+		out[id] = status
+	}
+	for id, worker := range transcodeWorkers {
+		status := out[id]
+		status.Transcode = generationStatusFromTranscode(worker.Status())
 		out[id] = status
 	}
 	return out
@@ -685,6 +711,126 @@ func generationStatusFromFingerprint(status fingerprint.TaskStatus) api.Generati
 		out.CooldownUntil = status.CooldownUntil.Format(time.RFC3339)
 	}
 	return out
+}
+
+func generationStatusFromTranscode(status transcode.TaskStatus) api.GenerationStatus {
+	state := status.State
+	if state == "" {
+		state = "idle"
+	}
+	return api.GenerationStatus{
+		State:        state,
+		CurrentTitle: status.CurrentTitle,
+		QueueLength:  status.QueueLength,
+		DoneCount:    status.DoneCount,
+		TotalCount:   status.TotalCount,
+	}
+}
+
+// transcodeWorkDir 返回转码用的本地临时目录（下载原片 / 写产物），与
+// localUploadDir 一样挂在数据目录下，避免 /tmp 空间不足。
+func (a *App) transcodeWorkDir() string {
+	return filepath.Join(filepath.Dir(a.cfg.Storage.LocalPreviewDir), "transcode-tmp")
+}
+
+// startDriveTranscode 手动开启某盘的浏览器兼容性转码。
+// 转码从不自动运行：扫盘、夜间流水线都不会触发，这里是唯一入口。
+// 任务跑完候选列表后自然结束；中途可用 stopDriveTranscode / 停止所有任务中断。
+func (a *App) startDriveTranscode(ctx context.Context, driveID string) (bool, string) {
+	driveID = strings.TrimSpace(driveID)
+	if driveID == "" {
+		return false, "缺少存储 ID"
+	}
+	drv, ok := a.registry.Get(driveID)
+	if !ok {
+		return false, "存储未挂载或不可用"
+	}
+	switch drv.Kind() {
+	case spider91.Kind, scriptcrawler.Kind:
+		return false, "爬虫存储不支持转码"
+	}
+	workDir := a.transcodeWorkDir()
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		return false, "创建转码临时目录失败: " + err.Error()
+	}
+
+	a.transcodeMu.Lock()
+	if a.transcodeWorkers == nil {
+		a.transcodeWorkers = make(map[string]*transcode.Worker)
+		a.transcodeCancels = make(map[string]context.CancelFunc)
+	}
+	if existing := a.transcodeWorkers[driveID]; existing != nil {
+		a.transcodeMu.Unlock()
+		return false, "该存储的转码任务已在运行"
+	}
+	worker := transcode.NewWorker(transcode.Config{
+		FFmpegPath:  a.cfg.Preview.FFmpegPath,
+		FFprobePath: a.cfg.Preview.FFprobePath,
+		WorkDir:     workDir,
+	}, a.cat, drv)
+	taskCtx, done := a.registerDriveTaskContext(ctx, driveID)
+	runCtx, cancel := context.WithCancel(taskCtx)
+	a.transcodeWorkers[driveID] = worker
+	a.transcodeCancels[driveID] = cancel
+	a.transcodeMu.Unlock()
+
+	go func() {
+		defer func() {
+			cancel()
+			done()
+			a.transcodeMu.Lock()
+			if a.transcodeWorkers[driveID] == worker {
+				delete(a.transcodeWorkers, driveID)
+				delete(a.transcodeCancels, driveID)
+			}
+			a.transcodeMu.Unlock()
+		}()
+		candidates, err := a.cat.ListTranscodeCandidates(runCtx, driveID, 0)
+		if err != nil {
+			log.Printf("[transcode] list candidates drive=%s: %v", driveID, err)
+			return
+		}
+		if len(candidates) == 0 {
+			log.Printf("[transcode] drive=%s no candidates", driveID)
+			return
+		}
+		log.Printf("[transcode] drive=%s start, %d candidates", driveID, len(candidates))
+		worker.Run(runCtx, candidates)
+	}()
+	return true, ""
+}
+
+// stopAllDriveTranscodes 停掉所有盘的转码任务，返回被停的 driveID 列表。
+func (a *App) stopAllDriveTranscodes() []string {
+	a.transcodeMu.Lock()
+	cancels := a.transcodeCancels
+	a.transcodeCancels = nil
+	a.transcodeWorkers = nil
+	a.transcodeMu.Unlock()
+	ids := make([]string, 0, len(cancels))
+	for id, cancel := range cancels {
+		if cancel != nil {
+			cancel()
+		}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// stopDriveTranscode 手动停止某盘的转码任务。返回是否有任务被停。
+func (a *App) stopDriveTranscode(driveID string) bool {
+	driveID = strings.TrimSpace(driveID)
+	a.transcodeMu.Lock()
+	cancel := a.transcodeCancels[driveID]
+	delete(a.transcodeCancels, driveID)
+	delete(a.transcodeWorkers, driveID)
+	a.transcodeMu.Unlock()
+	if cancel == nil {
+		return false
+	}
+	cancel()
+	log.Printf("[transcode] stop drive=%s", driveID)
+	return true
 }
 
 func (a *App) attachDrive(ctx context.Context, d *catalog.Drive) error {
@@ -1435,10 +1581,11 @@ func (a *App) stopDriveTasks(ctx context.Context, driveID string) bool {
 	queued := a.clearQueuedDriveTask(driveID)
 	fingerprintQueued := a.clearFingerprintQueueing(driveID)
 	uploading := a.clearCrawlerUploadProgress(driveID)
+	transcoding := a.stopDriveTranscode(driveID)
 	hadWorkers := a.resetDriveGenerationWorkers(ctx, driveID)
-	stopped := canceled > 0 || queued || fingerprintQueued || uploading || hadWorkers
-	log.Printf("[tasks] stop drive=%s stopped=%v canceled_tasks=%d queued=%v fingerprint_queue=%v uploading=%v workers=%v",
-		driveID, stopped, canceled, queued, fingerprintQueued, uploading, hadWorkers)
+	stopped := canceled > 0 || queued || fingerprintQueued || uploading || transcoding || hadWorkers
+	log.Printf("[tasks] stop drive=%s stopped=%v canceled_tasks=%d queued=%v fingerprint_queue=%v uploading=%v transcoding=%v workers=%v",
+		driveID, stopped, canceled, queued, fingerprintQueued, uploading, transcoding, hadWorkers)
 	return stopped
 }
 
@@ -1457,6 +1604,9 @@ func (a *App) stopAllDriveTasks(ctx context.Context) int {
 		stoppedIDs[id] = struct{}{}
 	}
 	for _, id := range a.clearAllCrawlerUploadProgress() {
+		stoppedIDs[id] = struct{}{}
+	}
+	for _, id := range a.stopAllDriveTranscodes() {
 		stoppedIDs[id] = struct{}{}
 	}
 	for _, id := range a.resetAllDriveGenerationWorkers(ctx) {

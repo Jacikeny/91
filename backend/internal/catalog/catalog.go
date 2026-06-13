@@ -71,6 +71,12 @@ type Video struct {
 	PreviewFileID     string    `json:"previewFileId"`
 	PreviewLocal      string    `json:"previewLocal"`
 	PreviewStatus     string    `json:"previewStatus"`
+	// TranscodeStatus：浏览器兼容性转码状态。
+	// ''=未检测 / pending=已入队 / ready=已转码 / skipped=无需转码 / failed=失败。
+	TranscodeStatus  string `json:"transcodeStatus"`
+	TranscodeError   string `json:"transcodeError"`
+	TranscodedFileID string `json:"transcodedFileId"`
+	TranscodedSize   int64  `json:"transcodedSize"`
 	Views             int       `json:"views"`
 	Favorites         int       `json:"favorites"`
 	Comments          int       `json:"comments"`
@@ -188,6 +194,84 @@ func (c *Catalog) UpdatePreview(ctx context.Context, id, previewLocal, status st
 		`UPDATE videos SET preview_file_id = '', preview_local = ?, preview_status = ?, updated_at = ? WHERE id = ?`,
 		previewLocal, status, time.Now().UnixMilli(), id)
 	return err
+}
+
+// transcodeCandidateWhereSQL 圈定"可能需要浏览器兼容性转码"的视频：
+// mp4/webm/m4v 默认浏览器可播不进候选；strm 是远程引用没有本体。
+// 其余扩展名都先入候选，由转码 worker probe 实际编码后决定转码还是跳过
+// （skipped）。failed 也保留在候选里，重新点开始转码时会自动重试。
+const transcodeCandidateWhereSQL = `COALESCE(ext, '') NOT IN ('mp4', 'webm', 'm4v', 'strm')
+	AND COALESCE(transcode_status, '') IN ('', 'pending', 'failed')`
+
+// ListTranscodeCandidates 列出某盘所有转码候选视频。limit<=0 表示不限制。
+func (c *Catalog) ListTranscodeCandidates(ctx context.Context, driveID string, limit int) ([]*Video, error) {
+	query := `SELECT ` + allVideoCols + ` FROM videos
+		 WHERE drive_id = ? AND ` + transcodeCandidateWhereSQL + `
+		 ORDER BY created_at ASC, id ASC`
+	args := []any{driveID}
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := c.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Video
+	for rows.Next() {
+		v, err := scanVideo(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// UpdateVideoTranscode 写回单条视频的转码结果。
+// status=ready 时 transcodedFileID/transcodedSize 指向转码产物；
+// 其它 status 调用方应传空值，本函数会按传入值原样覆盖。
+func (c *Catalog) UpdateVideoTranscode(ctx context.Context, id, status, errMsg, transcodedFileID string, transcodedSize int64) error {
+	_, err := c.db.ExecContext(ctx,
+		`UPDATE videos SET transcode_status = ?, transcode_error = ?, transcoded_file_id = ?, transcoded_size = ?, updated_at = ? WHERE id = ?`,
+		status, errMsg, transcodedFileID, transcodedSize, time.Now().UnixMilli(), id)
+	return err
+}
+
+// DriveTranscodeCounts 是单盘的转码进度统计。
+type DriveTranscodeCounts struct {
+	// Pending 是仍在候选集合里、还没有出结果的数量（含从未检测过的）。
+	Pending int
+	Ready   int
+	Failed  int
+	Skipped int
+}
+
+func (c *Catalog) CountTranscodesByDrive(ctx context.Context) (map[string]DriveTranscodeCounts, error) {
+	rows, err := c.db.QueryContext(ctx, `
+		SELECT drive_id,
+		        COUNT(CASE WHEN COALESCE(ext, '') NOT IN ('mp4', 'webm', 'm4v', 'strm')
+		                    AND COALESCE(transcode_status, '') IN ('', 'pending') THEN 1 END) AS pending_count,
+		        COUNT(CASE WHEN COALESCE(transcode_status, '') = 'ready' THEN 1 END) AS ready_count,
+		        COUNT(CASE WHEN COALESCE(transcode_status, '') = 'failed' THEN 1 END) AS failed_count,
+		        COUNT(CASE WHEN COALESCE(transcode_status, '') = 'skipped' THEN 1 END) AS skipped_count
+		  FROM videos
+		 GROUP BY drive_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]DriveTranscodeCounts)
+	for rows.Next() {
+		var driveID string
+		var counts DriveTranscodeCounts
+		if err := rows.Scan(&driveID, &counts.Pending, &counts.Ready, &counts.Failed, &counts.Skipped); err != nil {
+			return nil, err
+		}
+		out[driveID] = counts
+	}
+	return out, rows.Err()
 }
 
 func (c *Catalog) HideVideo(ctx context.Context, id string) error {
@@ -2165,6 +2249,7 @@ COALESCE(sampled_sha256, ''), COALESCE(fingerprint_status, 'pending'), COALESCE(
 COALESCE(parent_id, ''), title, COALESCE(author, ''), COALESCE(tags, '[]'),
 duration_seconds, size_bytes, COALESCE(ext, ''), COALESCE(quality, ''), COALESCE(thumbnail_url, ''),
 COALESCE(preview_file_id, ''), COALESCE(preview_local, ''), COALESCE(preview_status, 'pending'),
+COALESCE(transcode_status, ''), COALESCE(transcode_error, ''), COALESCE(transcoded_file_id, ''), COALESCE(transcoded_size, 0),
 views, favorites, comments, likes, dislikes,
 COALESCE(category, ''), COALESCE(hidden, 0), COALESCE(badges, '[]'), COALESCE(description, ''),
 published_at, created_at, updated_at
@@ -2236,6 +2321,7 @@ func scanVideo(row rowScanner) (*Video, error) {
 		&v.ParentID, &v.Title, &v.Author, &tagsJSON,
 		&v.DurationSeconds, &v.Size, &v.Ext, &v.Quality, &v.ThumbnailURL,
 		&v.PreviewFileID, &v.PreviewLocal, &v.PreviewStatus,
+		&v.TranscodeStatus, &v.TranscodeError, &v.TranscodedFileID, &v.TranscodedSize,
 		&v.Views, &v.Favorites, &v.Comments, &v.Likes, &v.Dislikes,
 		&v.Category, &hidden, &badgesJSON, &v.Description,
 		&publishedAt, &createdAt, &updatedAt,
