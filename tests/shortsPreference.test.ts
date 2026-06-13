@@ -34,13 +34,71 @@ test("shorts progress dragging uses immediate pointer state", () => {
 test("shorts progress listeners rebind when deferred videos mount", () => {
   assert.match(
     shortsPageSource,
-    /MOUNT_RADIUS 会让第三屏以后的 slide 先以海报占位/
+    /MOUNT_RADIUS 会让远离当前屏的 slide 先以海报占位/
   );
   assert.match(shortsPageSource, /if \(!shouldMount\) \{\s*setDuration\(0\);\s*setCurrentTime\(0\);/);
   assert.match(
     shortsPageSource,
-    /\}, \[shouldMount, item\.id, muted, volume, setMuted, setVolume\]\);/
+    /\}, \[shouldMount, shouldLoad, item\.id, index, isActive, muted, volume, setMuted, setVolume, onActiveReadyForPreload, onActiveNeedsPriority, onSourceCached\]\);/
   );
+});
+
+test("shorts preloads the next original video only after the active video has comfortable buffer", () => {
+  assert.match(shortsPageSource, /const \[activeReadyForPreload, setActiveReadyForPreload\] = useState\(false\);/);
+  assert.match(shortsPageSource, /const ACTIVE_PRELOAD_BUFFER_SECONDS = 12;/);
+  assert.match(shortsPageSource, /const shouldPreload = activeReadyForPreload && index === activeIndex \+ 1;/);
+  assert.match(shortsPageSource, /const shouldLoad = isActiveSlide \|\| shouldPreload \|\| shouldRetainCached;/);
+  assert.match(shortsPageSource, /shouldLoad=\{shouldLoad\}/);
+  assert.match(shortsPageSource, /setActiveReadyForPreload\(false\);\s*setActiveIndex\(bestIndex\);/);
+  assert.match(shortsPageSource, /function syncActivePreloadReadiness\(currentVideo: HTMLVideoElement\)/);
+  assert.match(shortsPageSource, /if \(videoHasComfortableBuffer\(currentVideo\)\) \{\s*onActiveReadyForPreload\(index\);/);
+  assert.match(shortsPageSource, /if \(isActive\) onActiveNeedsPriority\(index\);/);
+  assert.match(shortsPageSource, /video\.addEventListener\("progress", handleProgress\);/);
+  assert.match(shortsPageSource, /src=\{shouldLoad \? item\.videoSrc : undefined\}/);
+  assert.match(shortsPageSource, /video\.removeAttribute\("src"\)/);
+  assert.doesNotMatch(shortsPageSource, /src=\{shouldLoad \? item\.previewSrc/);
+});
+
+test("shorts preload grant uses high/low watermark hysteresis", () => {
+  // 高水位 12s 授权、低水位 4s 收回，之间维持现状，避免阈值附近抖动
+  assert.match(shortsPageSource, /const ACTIVE_PRELOAD_KEEP_SECONDS = 4;/);
+  assert.match(
+    shortsPageSource,
+    /\} else if \(videoBufferIsCritical\(currentVideo\)\) \{[\s\S]*?onActiveNeedsPriority\(index\);/
+  );
+  assert.match(shortsPageSource, /function videoBufferIsCritical\(video: HTMLVideoElement\)/);
+  // 已缓冲到片尾时既视为健康也不视为告急，避免临近结尾误收回授权
+  assert.match(shortsPageSource, /function videoBufferedToEnd\(video: HTMLVideoElement\)/);
+  assert.match(
+    shortsPageSource,
+    /if \(videoBufferedToEnd\(video\)\) return true;[\s\S]*?>= ACTIVE_PRELOAD_BUFFER_SECONDS;/
+  );
+  assert.match(
+    shortsPageSource,
+    /if \(videoBufferedToEnd\(video\)\) return false;[\s\S]*?< ACTIVE_PRELOAD_KEEP_SECONDS;/
+  );
+});
+
+test("shorts keeps adjacent buffered sources as a lightweight cache", () => {
+  assert.match(shortsPageSource, /const \[cacheableSourceIds, setCacheableSourceIds\] = useState<Set<string>>/);
+  assert.match(shortsPageSource, /setCacheableSourceIds\(\(prev\) => \{/);
+  // 相邻屏内（前一条或后一条）已缓冲过的视频都保留 src，回滑/再前滑均复用缓存
+  assert.match(
+    shortsPageSource,
+    /const shouldRetainCached =\s*shouldMount && !isActiveSlide && cacheableSourceIds\.has\(item\.id\);/
+  );
+  // 活跃视频一旦 canplay 就标记可复用，快速划走的视频回滑也有缓存
+  assert.match(
+    shortsPageSource,
+    /if \(isActive\) onSourceCached\(item\.id\);/
+  );
+  // 预加载中的下一条积累到足够缓冲后同样标记，授权收回时不丢弃其数据
+  assert.match(
+    shortsPageSource,
+    /if \(!isActive && shouldLoad && videoHasComfortableBuffer\(video\)\) \{\s*onSourceCached\(item\.id\);/
+  );
+  assert.match(shortsPageSource, /shouldEagerLoad=\{shouldEagerLoad\}/);
+  assert.match(shortsPageSource, /preload=\{shouldLoad \? \(shouldEagerLoad \? "auto" : "metadata"\) : "none"\}/);
 });
 
 test("shorts fullscreen changes preserve the active slide", () => {
