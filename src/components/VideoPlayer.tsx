@@ -986,7 +986,7 @@ function createHlsSourceLoader(
     destroyHls(target);
     onError(null);
 
-    void import("hls.js")
+    void import("hls.js/light")
       .then((hlsModule) => {
         if (art.isDestroy || !video.isConnected) return;
         loadHlsSourceWith(video, url, art, hlsModule.default, onError);

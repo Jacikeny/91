@@ -25,45 +25,50 @@ function mobileCss(): string {
   return adminCss.slice(start);
 }
 
-test("admin toasts auto-dismiss unless the toast body is clicked", () => {
-  assert.match(toastSource, /const TOAST_DISMISS_MS = 2600/);
-  assert.match(toastSource, /pinnedToastIDs\.current\.has\(id\)/);
-  assert.match(toastSource, /if \(isDismissPaused\(id\)\) return/);
-  assert.match(toastSource, /onClick=\{\(\) => pinDismiss\(t\.id\)\}/);
-  assert.match(toastSource, /className="admin-toast__close"/);
-  assert.match(toastSource, /aria-label="关闭提示"/);
-  assert.match(toastSource, /<X size=\{16\} strokeWidth=\{2\.4\} \/>/);
-  assert.match(toastSource, /event\.stopPropagation\(\)/);
-  assert.match(toastSource, /removeToast\(t\.id, t\.text\)/);
+test("admin toasts auto-dismiss and copy their text when clicked", () => {
+  assert.match(toastSource, /const TOAST_DISMISS_MS = 2500/);
+  assert.match(toastSource, /const TOAST_COPY_SUCCESS_TEXT = "已复制到剪贴板"/);
+  assert.match(toastSource, /const TOAST_COPY_ERROR_TEXT = "复制失败，请手动复制"/);
+  assert.match(toastSource, /navigator\.clipboard\?\.writeText/);
+  assert.match(toastSource, /fallbackCopyText\(text\)/);
+  assert.match(toastSource, /document\.execCommand\("copy"\)/);
+  assert.match(toastSource, /addToast\(TOAST_COPY_SUCCESS_TEXT,\s*"success",\s*false\)/);
+  assert.match(toastSource, /addToast\(TOAST_COPY_ERROR_TEXT,\s*"error",\s*false\)/);
+  assert.match(toastSource, /t\.copyable\s*\?\s*" is-copyable"\s*:\s*""/);
+  assert.match(toastSource, /onClick=\{t\.copyable \? \(\) => copyToastText\(t\.text\) : undefined\}/);
+  assert.match(toastSource, /aria-label=\{t\.copyable \? `复制提示：\$\{t\.text\}` : undefined\}/);
+  assert.match(toastSource, /event\.key !== "Enter" && event\.key !== " "/);
+  assert.doesNotMatch(toastSource, /onClick=\{\(\) => scheduleDismiss/);
+  assert.doesNotMatch(toastSource, /pinnedToastIDs/);
+  assert.doesNotMatch(toastSource, /isDismissPaused/);
+  assert.doesNotMatch(toastSource, /pinDismiss/);
+  assert.doesNotMatch(toastSource, /className="admin-toast__close"/);
+  assert.doesNotMatch(toastSource, /aria-label="关闭提示"/);
+  assert.doesNotMatch(toastSource, /<X size=/);
+  assert.doesNotMatch(toastSource, /event\.stopPropagation\(\)/);
   assert.doesNotMatch(toastSource, /onPointerEnter/);
   assert.doesNotMatch(toastSource, /onPointerLeave/);
 });
 
-test("admin toasts fit long messages on mobile", () => {
+test("admin toasts show long messages without internal scrolling", () => {
   const baseToast = ruleBody(adminCss, ".admin-toast");
   const baseText = ruleBody(adminCss, ".admin-toast__text");
-  const closeButton = ruleBody(adminCss, ".admin-toast__close");
   const mobileToast = ruleBody(mobileCss(), ".admin-toast");
-  const mobileText = ruleBody(mobileCss(), ".admin-toast__text");
-  const mobileCloseButton = ruleBody(mobileCss(), ".admin-toast__close");
 
   assert.match(baseToast, /max-width\s*:\s*min\(520px,\s*calc\(100vw - 48px\)\)/);
-  assert.match(baseToast, /padding\s*:\s*14px\s+54px\s+14px\s+18px/);
+  assert.match(baseToast, /padding\s*:\s*14px\s+18px/);
   assert.match(baseToast, /position\s*:\s*relative/);
   assert.match(baseToast, /overflow-wrap\s*:\s*anywhere/);
   assert.match(baseToast, /touch-action\s*:\s*manipulation/);
-  assert.match(baseText, /padding-right\s*:\s*2px/);
-  assert.match(closeButton, /position\s*:\s*absolute/);
-  assert.match(closeButton, /top\s*:\s*10px/);
-  assert.match(closeButton, /right\s*:\s*10px/);
-  assert.match(closeButton, /width\s*:\s*30px/);
-  assert.match(closeButton, /border\s*:\s*1px\s+solid\s+currentColor/);
-  assert.match(closeButton, /cursor\s*:\s*pointer/);
+  assert.doesNotMatch(baseToast, /cursor\s*:\s*pointer/);
+  assert.match(ruleBody(adminCss, ".admin-toast.is-copyable"), /cursor\s*:\s*pointer/);
+  assert.match(baseText, /display\s*:\s*block/);
+  assert.doesNotMatch(adminCss, /\.admin-toast__close/);
   assert.match(mobileToast, /max-width\s*:\s*100%/);
-  assert.match(mobileToast, /max-height\s*:\s*min\(42vh,\s*220px\)/);
   assert.match(mobileToast, /text-align\s*:\s*left/);
-  assert.match(mobileText, /max-height\s*:\s*min\(32vh,\s*168px\)/);
-  assert.match(mobileText, /overflow-y\s*:\s*auto/);
-  assert.match(mobileCloseButton, /width\s*:\s*34px/);
-  assert.match(mobileCloseButton, /height\s*:\s*34px/);
+  assert.doesNotMatch(baseToast, /max-height/);
+  assert.doesNotMatch(baseText, /max-height/);
+  assert.doesNotMatch(baseText, /overflow-y\s*:\s*auto/);
+  assert.doesNotMatch(mobileToast, /max-height/);
+  assert.doesNotMatch(mobileCss(), /\.admin-toast__text\s*\{/);
 });

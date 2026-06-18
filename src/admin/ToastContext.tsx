@@ -7,27 +7,54 @@ import {
   useRef,
   useState,
 } from "react";
-import { X } from "lucide-react";
 
 type ToastKind = "info" | "success" | "error";
-type Toast = { id: number; kind: ToastKind; text: string };
+type Toast = { id: number; kind: ToastKind; text: string; copyable: boolean };
 
 type Ctx = {
   show: (text: string, kind?: ToastKind) => void;
 };
 
 const ToastCtx = createContext<Ctx | null>(null);
-const TOAST_DISMISS_MS = 2600;
+const TOAST_DISMISS_MS = 2500;
+const TOAST_COPY_SUCCESS_TEXT = "已复制到剪贴板";
+const TOAST_COPY_ERROR_TEXT = "复制失败，请手动复制";
+
+async function copyTextToClipboard(text: string) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+  } catch {
+    // Fall back to the legacy copy command below.
+  }
+  if (!fallbackCopyText(text)) {
+    throw new Error("copy failed");
+  }
+}
+
+function fallbackCopyText(text: string) {
+  if (!document.body) return false;
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  try {
+    return document.execCommand("copy");
+  } finally {
+    document.body.removeChild(textarea);
+  }
+}
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<Toast[]>([]);
   const timers = useRef(new Map<number, ReturnType<typeof window.setTimeout>>());
   const idsByText = useRef(new Map<string, number>());
-  const pinnedToastIDs = useRef(new Set<number>());
-
-  const isDismissPaused = useCallback((id: number) => {
-    return pinnedToastIDs.current.has(id);
-  }, []);
 
   const clearDismissTimer = useCallback((id: number) => {
     const timer = timers.current.get(id);
@@ -39,7 +66,6 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const removeToast = useCallback(
     (id: number, text: string) => {
       clearDismissTimer(id);
-      pinnedToastIDs.current.delete(id);
       if (idsByText.current.get(text) === id) {
         idsByText.current.delete(text);
       }
@@ -51,40 +77,47 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const scheduleDismiss = useCallback(
     (id: number, text: string) => {
       clearDismissTimer(id);
-      if (isDismissPaused(id)) return;
       timers.current.set(
         id,
         window.setTimeout(() => removeToast(id, text), TOAST_DISMISS_MS)
       );
     },
-    [clearDismissTimer, isDismissPaused, removeToast]
+    [clearDismissTimer, removeToast]
   );
 
-  const pinDismiss = useCallback(
-    (id: number) => {
-      pinnedToastIDs.current.add(id);
-      clearDismissTimer(id);
-    },
-    [clearDismissTimer]
-  );
-
-  // Deduplicate: same text won't stack, just resets the dismiss timer
-  const show = useCallback(
-    (text: string, kind: ToastKind = "info") => {
+  const addToast = useCallback(
+    (text: string, kind: ToastKind = "info", copyable = true) => {
       const existingID = idsByText.current.get(text);
       if (existingID !== undefined) {
         setItems((list) =>
-          list.map((t) => (t.id === existingID ? { ...t, kind } : t))
+          list.map((t) => (t.id === existingID ? { ...t, kind, copyable } : t))
         );
         scheduleDismiss(existingID, text);
         return;
       }
       const id = Date.now() + Math.random();
       idsByText.current.set(text, id);
-      setItems((list) => [...list, { id, kind, text }]);
+      setItems((list) => [...list, { id, kind, text, copyable }]);
       scheduleDismiss(id, text);
     },
     [scheduleDismiss]
+  );
+
+  // Deduplicate: same text won't stack, just resets the dismiss timer
+  const show = useCallback(
+    (text: string, kind: ToastKind = "info") => {
+      addToast(text, kind, true);
+    },
+    [addToast]
+  );
+
+  const copyToastText = useCallback(
+    (text: string) => {
+      void copyTextToClipboard(text)
+        .then(() => addToast(TOAST_COPY_SUCCESS_TEXT, "success", false))
+        .catch(() => addToast(TOAST_COPY_ERROR_TEXT, "error", false));
+    },
+    [addToast]
   );
 
   useEffect(() => {
@@ -94,7 +127,6 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       }
       timers.current.clear();
       idsByText.current.clear();
-      pinnedToastIDs.current.clear();
     };
   }, []);
 
@@ -105,22 +137,24 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         {items.map((t) => (
           <div
             key={t.id}
-            className={`admin-toast is-${t.kind}`}
-            onClick={() => pinDismiss(t.id)}
+            className={`admin-toast is-${t.kind}${
+              t.copyable ? " is-copyable" : ""
+            }`}
+            role={t.copyable ? "button" : undefined}
+            tabIndex={t.copyable ? 0 : undefined}
+            aria-label={t.copyable ? `复制提示：${t.text}` : undefined}
+            onClick={t.copyable ? () => copyToastText(t.text) : undefined}
+            onKeyDown={
+              t.copyable
+                ? (event) => {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    event.preventDefault();
+                    copyToastText(t.text);
+                  }
+                : undefined
+            }
           >
             <span className="admin-toast__text">{t.text}</span>
-            <button
-              type="button"
-              className="admin-toast__close"
-              aria-label="关闭提示"
-              onPointerDown={(event) => event.stopPropagation()}
-              onClick={(event) => {
-                event.stopPropagation();
-                removeToast(t.id, t.text);
-              }}
-            >
-              <X size={16} strokeWidth={2.4} />
-            </button>
           </div>
         ))}
       </div>
