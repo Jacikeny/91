@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS videos (
     transcoded_file_id TEXT DEFAULT '',         -- 转码产物在同一 drive 上的 fileID，播放源优先用它
     transcoded_size  INTEGER DEFAULT 0,
     views            INTEGER DEFAULT 0,
+    last_viewed_at   INTEGER DEFAULT 0,
     favorites        INTEGER DEFAULT 0,
     comments         INTEGER DEFAULT 0,
     likes            INTEGER DEFAULT 0,

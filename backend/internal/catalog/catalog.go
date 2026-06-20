@@ -78,6 +78,7 @@ type Video struct {
 	TranscodedFileID string    `json:"transcodedFileId"`
 	TranscodedSize   int64     `json:"transcodedSize"`
 	Views            int       `json:"views"`
+	LastViewedAt     time.Time `json:"lastViewedAt"`
 	Favorites        int       `json:"favorites"`
 	Comments         int       `json:"comments"`
 	Likes            int       `json:"likes"`
@@ -112,13 +113,13 @@ INSERT INTO videos (
   id, drive_id, file_id, file_name, content_hash, sampled_sha256, fingerprint_status, fingerprint_error, parent_id, title, author, tags,
   duration_seconds, size_bytes, ext, quality, thumbnail_url, thumbnail_status,
   preview_file_id, preview_local, preview_status,
-  views, favorites, comments, likes, dislikes,
+  views, last_viewed_at, favorites, comments, likes, dislikes,
   category, hidden, badges, description, published_at, created_at, updated_at
 ) VALUES (
   ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
   ?, ?, ?, ?, ?, CASE WHEN COALESCE(?, '') != '' THEN 'ready' ELSE 'pending' END,
   ?, ?, ?,
-  ?, ?, ?, ?, ?,
+  ?, ?, ?, ?, ?, ?,
   ?, ?, ?, ?, ?, ?, ?
 )
 ON CONFLICT(id) DO UPDATE SET
@@ -169,7 +170,7 @@ ON CONFLICT(id) DO UPDATE SET
 		v.ID, v.DriveID, v.FileID, v.FileName, v.ContentHash, v.SampledSHA256, fingerprintStatus, v.FingerprintError, v.ParentID, v.Title, v.Author, string(tagsJSON),
 		v.DurationSeconds, v.Size, v.Ext, v.Quality, v.ThumbnailURL, v.ThumbnailURL,
 		v.PreviewFileID, v.PreviewLocal, nullableStatus(v.PreviewStatus),
-		v.Views, v.Favorites, v.Comments, v.Likes, v.Dislikes,
+		v.Views, unixMilliOrZero(v.LastViewedAt), v.Favorites, v.Comments, v.Likes, v.Dislikes,
 		v.Category, boolToInt(v.Hidden), string(badgesJSON), v.Description,
 		v.PublishedAt.UnixMilli(), v.CreatedAt.UnixMilli(), v.UpdatedAt.UnixMilli(),
 	)
@@ -423,9 +424,10 @@ func (c *Catalog) IncrementView(ctx context.Context, id string) (int, error) {
 		return 0, err
 	}
 	defer tx.Rollback()
+	now := time.Now().UnixMilli()
 	res, err := tx.ExecContext(ctx,
-		`UPDATE videos SET views = views + 1, updated_at = ? WHERE id = ?`,
-		time.Now().UnixMilli(), id)
+		`UPDATE videos SET views = views + 1, last_viewed_at = ?, updated_at = ? WHERE id = ?`,
+		now, now, id)
 	if err != nil {
 		return 0, err
 	}
@@ -1364,7 +1366,7 @@ type ListParams struct {
 	DriveID               string
 	Tag                   string
 	Category              string
-	Sort                  string // latest | hot | week | long
+	Sort                  string // latest | hot | recent
 	ThumbnailReadyOnly    bool
 	PreferReadyThumbnails bool
 	SkipTotal             bool
@@ -1419,10 +1421,8 @@ func (c *Catalog) ListVideos(ctx context.Context, p ListParams) ([]*Video, int, 
 	case "hot":
 		// 热度 = 点赞数，点赞相同按最新
 		orderBy = " ORDER BY " + readyOrderPrefix + "likes DESC, published_at DESC"
-	case "week":
-		orderBy = " ORDER BY " + readyOrderPrefix + "likes DESC"
-	case "long":
-		orderBy = " ORDER BY " + readyOrderPrefix + "duration_seconds DESC"
+	case "recent":
+		orderBy = " ORDER BY " + readyOrderPrefix + "COALESCE(last_viewed_at, 0) DESC, published_at DESC"
 	}
 
 	var total int
@@ -2215,7 +2215,7 @@ COALESCE(parent_id, ''), title, COALESCE(author, ''), COALESCE(tags, '[]'),
 duration_seconds, size_bytes, COALESCE(ext, ''), COALESCE(quality, ''), COALESCE(thumbnail_url, ''),
 COALESCE(preview_file_id, ''), COALESCE(preview_local, ''), COALESCE(preview_status, 'pending'),
 COALESCE(transcode_status, ''), COALESCE(transcode_error, ''), COALESCE(transcoded_file_id, ''), COALESCE(transcoded_size, 0),
-views, favorites, comments, likes, dislikes,
+views, COALESCE(last_viewed_at, 0), favorites, comments, likes, dislikes,
 COALESCE(category, ''), COALESCE(hidden, 0), COALESCE(badges, '[]'), COALESCE(description, ''),
 published_at, created_at, updated_at
 `
@@ -2278,7 +2278,7 @@ type rowScanner interface {
 func scanVideo(row rowScanner) (*Video, error) {
 	v := &Video{}
 	var tagsJSON, badgesJSON string
-	var publishedAt, createdAt, updatedAt int64
+	var publishedAt, createdAt, updatedAt, lastViewedAt int64
 	var hidden int
 	err := row.Scan(
 		&v.ID, &v.DriveID, &v.FileID, &v.FileName, &v.ContentHash,
@@ -2287,7 +2287,7 @@ func scanVideo(row rowScanner) (*Video, error) {
 		&v.DurationSeconds, &v.Size, &v.Ext, &v.Quality, &v.ThumbnailURL,
 		&v.PreviewFileID, &v.PreviewLocal, &v.PreviewStatus,
 		&v.TranscodeStatus, &v.TranscodeError, &v.TranscodedFileID, &v.TranscodedSize,
-		&v.Views, &v.Favorites, &v.Comments, &v.Likes, &v.Dislikes,
+		&v.Views, &lastViewedAt, &v.Favorites, &v.Comments, &v.Likes, &v.Dislikes,
 		&v.Category, &hidden, &badgesJSON, &v.Description,
 		&publishedAt, &createdAt, &updatedAt,
 	)
@@ -2300,11 +2300,21 @@ func scanVideo(row rowScanner) (*Video, error) {
 	v.PublishedAt = time.UnixMilli(publishedAt)
 	v.CreatedAt = time.UnixMilli(createdAt)
 	v.UpdatedAt = time.UnixMilli(updatedAt)
+	if lastViewedAt > 0 {
+		v.LastViewedAt = time.UnixMilli(lastViewedAt)
+	}
 	return v, nil
 }
 
 func normalizeContentHash(hash string) string {
 	return strings.ToLower(strings.TrimSpace(hash))
+}
+
+func unixMilliOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixMilli()
 }
 
 func boolToInt(v bool) int {
