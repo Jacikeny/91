@@ -164,3 +164,13 @@ CREATE TABLE IF NOT EXISTS settings (
     value      TEXT NOT NULL,
     updated_at INTEGER NOT NULL
 );
+
+-- 普通用户表
+CREATE TABLE IF NOT EXISTS users (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    username   TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    password   TEXT NOT NULL,                    -- bcrypt 哈希
+    role       TEXT NOT NULL DEFAULT 'user',     -- admin / user
+    banned     INTEGER NOT NULL DEFAULT 0,       -- 1 = 被封禁
+    created_at INTEGER NOT NULL
+);

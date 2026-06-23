@@ -2,6 +2,7 @@ import { Suspense, lazy } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { SkyStarfield } from "@/components/SkyStarfield";
 import { RequireAuth } from "@/admin/RequireAuth";
+import { RequireAdmin } from "@/admin/RequireAdmin";
 
 const HomePage = lazy(() => import("@/pages/HomePage"));
 const ListingPage = lazy(() => import("@/pages/ListingPage"));
@@ -33,6 +34,9 @@ const TagsPage = lazy(() =>
 );
 const ThemePage = lazy(() =>
   import("@/admin/ThemePage").then((module) => ({ default: module.ThemePage }))
+);
+const UsersPage = lazy(() =>
+  import("@/admin/UsersPage").then((module) => ({ default: module.UsersPage }))
 );
 
 export default function App() {
@@ -86,12 +90,14 @@ export default function App() {
             }
           />
 
-          {/* 管理后台也需要登录 */}
+          {/* 管理后台需要管理员权限 */}
           <Route
             path="/admin"
             element={
               <RequireAuth>
-                <AdminLayout />
+                <RequireAdmin>
+                  <AdminLayout />
+                </RequireAdmin>
               </RequireAuth>
             }
           >
@@ -101,6 +107,7 @@ export default function App() {
             <Route path="videos" element={<VideosPage />} />
             <Route path="tags" element={<TagsPage />} />
             <Route path="theme" element={<ThemePage />} />
+            <Route path="users" element={<UsersPage />} />
           </Route>
 
           <Route path="*" element={<Navigate to="/" replace />} />

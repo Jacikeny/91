@@ -2138,24 +2138,27 @@ func (c *Catalog) SetDriveSkipDirIDs(ctx context.Context, id string, ids []strin
 
 // ---------- Admin session ----------
 
-func (c *Catalog) CreateSession(ctx context.Context, token string, ttl time.Duration) error {
+func (c *Catalog) CreateSession(ctx context.Context, token string, ttl time.Duration, userID int64) error {
 	now := time.Now()
 	_, err := c.db.ExecContext(ctx,
-		`INSERT INTO admin_sessions (token, created_at, expires_at) VALUES (?, ?, ?)`,
-		token, now.UnixMilli(), now.Add(ttl).UnixMilli())
+		`INSERT INTO admin_sessions (token, created_at, expires_at, user_id) VALUES (?, ?, ?, ?)`,
+		token, now.UnixMilli(), now.Add(ttl).UnixMilli(), userID)
 	return err
 }
 
-func (c *Catalog) ValidateSession(ctx context.Context, token string) (bool, error) {
+func (c *Catalog) ValidateSession(ctx context.Context, token string) (bool, int64, error) {
 	var expires int64
-	err := c.db.QueryRowContext(ctx, `SELECT expires_at FROM admin_sessions WHERE token = ?`, token).Scan(&expires)
+	var userID int64
+	err := c.db.QueryRowContext(ctx,
+		`SELECT expires_at, COALESCE(user_id, 0) FROM admin_sessions WHERE token = ?`,
+		token).Scan(&expires, &userID)
 	if err == sql.ErrNoRows {
-		return false, nil
+		return false, 0, nil
 	}
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
-	return time.Now().UnixMilli() < expires, nil
+	return time.Now().UnixMilli() < expires, userID, nil
 }
 
 func (c *Catalog) DeleteSession(ctx context.Context, token string) error {

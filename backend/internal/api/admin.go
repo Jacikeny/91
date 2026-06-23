@@ -161,9 +161,9 @@ func (a *AdminServer) Register(r chi.Router) {
 		r.Post("/logout", a.handleLogout)
 		r.Get("/me", a.handleMe)
 
-		// 其余路由需鉴权
+		// 其余路由需管理员鉴权
 		r.Group(func(r chi.Router) {
-			r.Use(a.Auth.Required)
+			r.Use(a.Auth.AdminRequired)
 
 			// 网盘
 			r.Get("/drives", a.handleListDrives)
@@ -213,6 +213,18 @@ func (a *AdminServer) Register(r chi.Router) {
 			r.Get("/tags", a.handleListTags)
 			r.Post("/tags", a.handleCreateTag)
 			r.Delete("/tags/{id}", a.handleDeleteTag)
+
+			// 用户管理
+			r.Get("/users", a.handleListUsers)
+			r.Post("/users", a.handleCreateUser)
+			r.Delete("/users/{id}", a.handleDeleteUser)
+			r.Post("/users/{id}/ban", a.handleBanUser)
+			r.Post("/users/{id}/unban", a.handleUnbanUser)
+			r.Put("/users/{id}/password", a.handleResetPassword)
+
+			// IP 封禁管理
+			r.Get("/banned-ips", a.handleListBannedIPs)
+			r.Delete("/banned-ips/{ip}", a.handleUnbanIP)
 
 			// 运行时设置
 			r.Get("/settings", a.handleGetSettings)
@@ -313,20 +325,25 @@ func (a *AdminServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	ok, err := a.Auth.Login(w, r, body.Username, body.Password)
+
+	role, err := a.Auth.UserLogin(w, r, body.Username, body.Password)
 	if err != nil {
 		if errors.Is(err, auth.ErrLoginIPBanned) {
 			http.Error(w, "ip banned", http.StatusForbidden)
 			return
 		}
+		if errors.Is(err, auth.ErrUserBanned) {
+			http.Error(w, "user banned", http.StatusForbidden)
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	if !ok {
+	if role == "" {
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "role": role})
 }
 
 func (a *AdminServer) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -340,8 +357,21 @@ func (a *AdminServer) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"authenticated": false})
 		return
 	}
-	ok, _ := a.Catalog.ValidateSession(r.Context(), c.Value)
-	writeJSON(w, http.StatusOK, map[string]any{"authenticated": ok})
+	ok, userID, err := a.Catalog.ValidateSession(r.Context(), c.Value)
+	if err != nil || !ok {
+		writeJSON(w, http.StatusOK, map[string]any{"authenticated": false})
+		return
+	}
+
+	role := "user"
+	if userID > 0 {
+		if u, err := a.Catalog.GetUserByID(r.Context(), userID); err == nil {
+			role = u.Role
+		}
+	} else {
+		role = "admin"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "role": role})
 }
 
 func (a *AdminServer) handleCheckUpdate(w http.ResponseWriter, r *http.Request) {
@@ -2110,6 +2140,188 @@ func (a *AdminServer) handleRemoveBlacklist(w http.ResponseWriter, r *http.Reque
 	if err := a.Catalog.RemoveDeletedVideo(r.Context(), id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeErr(w, http.StatusNotFound, err)
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// ---------- User Management ----------
+
+type createUserReq struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+	Role     string `json:"role"`
+}
+
+type userDTO struct {
+	ID        int64  `json:"id"`
+	Username  string `json:"username"`
+	Role      string `json:"role"`
+	Banned    bool   `json:"banned"`
+	CreatedAt int64  `json:"createdAt"`
+}
+
+func (a *AdminServer) handleListUsers(w http.ResponseWriter, r *http.Request) {
+	users, err := a.Catalog.ListUsers(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	out := make([]userDTO, 0, len(users))
+	for _, u := range users {
+		out = append(out, userDTO{
+			ID: u.ID, Username: u.Username, Role: u.Role,
+			Banned: u.Banned, CreatedAt: u.CreatedAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (a *AdminServer) handleCreateUser(w http.ResponseWriter, r *http.Request) {
+	var body createUserReq
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	username := strings.TrimSpace(body.Username)
+	if username == "" {
+		http.Error(w, "username is required", http.StatusBadRequest)
+		return
+	}
+	if len(body.Password) < 6 {
+		http.Error(w, "password must be at least 6 characters", http.StatusBadRequest)
+		return
+	}
+	role := body.Role
+	if role == "" {
+		role = "user"
+	}
+	if role != "admin" && role != "user" {
+		http.Error(w, "role must be admin or user", http.StatusBadRequest)
+		return
+	}
+
+	hashed, err := auth.HashPassword(body.Password)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	id, err := a.Catalog.CreateUser(r.Context(), username, hashed, role)
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE") {
+			http.Error(w, "username already exists", http.StatusConflict)
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "id": id})
+}
+
+func (a *AdminServer) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid user id", http.StatusBadRequest)
+		return
+	}
+	c, _ := r.Cookie("vs_admin")
+	if c != nil {
+		if _, sessionUserID, _ := a.Catalog.ValidateSession(r.Context(), c.Value); sessionUserID == id {
+			http.Error(w, "cannot delete yourself", http.StatusBadRequest)
+			return
+		}
+	}
+	if err := a.Catalog.DeleteUser(r.Context(), id); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (a *AdminServer) handleBanUser(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid user id", http.StatusBadRequest)
+		return
+	}
+	if err := a.Catalog.SetUserBanned(r.Context(), id, true); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (a *AdminServer) handleUnbanUser(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid user id", http.StatusBadRequest)
+		return
+	}
+	if err := a.Catalog.SetUserBanned(r.Context(), id, false); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (a *AdminServer) handleResetPassword(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid user id", http.StatusBadRequest)
+		return
+	}
+	var body struct {
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if len(body.Password) < 6 {
+		http.Error(w, "password must be at least 6 characters", http.StatusBadRequest)
+		return
+	}
+	hashed, err := auth.HashPassword(body.Password)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := a.Catalog.UpdateUserPassword(r.Context(), id, hashed); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// ---------- IP Ban Management ----------
+
+type bannedIPDTO struct {
+	IP        string `json:"ip"`
+	Reason    string `json:"reason"`
+	CreatedAt int64  `json:"createdAt"`
+}
+
+func (a *AdminServer) handleListBannedIPs(w http.ResponseWriter, r *http.Request) {
+	ips, err := a.Catalog.ListBannedLoginIPs(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	out := make([]bannedIPDTO, 0, len(ips))
+	for _, ip := range ips {
+		out = append(out, bannedIPDTO{IP: ip.IP, Reason: ip.Reason, CreatedAt: ip.CreatedAt})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (a *AdminServer) handleUnbanIP(w http.ResponseWriter, r *http.Request) {
+	ip := chi.URLParam(r, "ip")
+	if err := a.Catalog.UnbanLoginIP(r.Context(), ip); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "IP not found", http.StatusNotFound)
 			return
 		}
 		writeErr(w, http.StatusInternalServerError, err)

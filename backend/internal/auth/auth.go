@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/video-site/backend/internal/catalog"
 )
 
@@ -23,6 +25,7 @@ const (
 )
 
 var ErrLoginIPBanned = errors.New("login ip banned")
+var ErrUserBanned = errors.New("user is banned")
 
 type Authenticator struct {
 	Username string
@@ -68,7 +71,7 @@ func (a *Authenticator) Login(w http.ResponseWriter, r *http.Request, user, pass
 	if err != nil {
 		return false, err
 	}
-	if err := a.Catalog.CreateSession(r.Context(), token, sessionTTL); err != nil {
+	if err := a.Catalog.CreateSession(r.Context(), token, sessionTTL, 0); err != nil {
 		return false, err
 	}
 	http.SetCookie(w, &http.Cookie{
@@ -151,7 +154,7 @@ func (a *Authenticator) Required(next http.Handler) http.Handler {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		ok, err := a.Catalog.ValidateSession(r.Context(), c.Value)
+		ok, _, err := a.Catalog.ValidateSession(r.Context(), c.Value)
 		if err != nil || !ok {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
@@ -201,5 +204,96 @@ func forwardedIPs(header string) []string {
 
 func isValidIP(ip string) bool {
 	_, err := netip.ParseAddr(strings.TrimSpace(ip))
+	return err == nil
+}
+
+// UserLogin authenticates a user (admin or regular) from the users table.
+// Returns the role on success, empty string on failure.
+func (a *Authenticator) UserLogin(w http.ResponseWriter, r *http.Request, user, pass string) (string, error) {
+	ip := clientIP(r)
+	if ip != "" {
+		banned, err := a.Catalog.IsLoginIPBanned(r.Context(), ip)
+		if err != nil {
+			return "", err
+		}
+		if banned {
+			return "", ErrLoginIPBanned
+		}
+	}
+
+	u, err := a.Catalog.GetUserByUsername(r.Context(), user)
+	if err != nil {
+		if ip != "" {
+			_ = a.recordFailure(r, ip)
+		}
+		return "", nil
+	}
+
+	if u.Banned {
+		return "", ErrUserBanned
+	}
+
+	if !checkPassword(pass, u.Password) {
+		if ip != "" {
+			_ = a.recordFailure(r, ip)
+		}
+		return "", nil
+	}
+
+	if ip != "" {
+		a.clearFailures(ip)
+	}
+
+	token, err := randomToken()
+	if err != nil {
+		return "", err
+	}
+	if err := a.Catalog.CreateSession(r.Context(), token, sessionTTL, u.ID); err != nil {
+		return "", err
+	}
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     sessionCookie,
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Expires:  time.Now().Add(sessionTTL),
+	})
+	return u.Role, nil
+}
+
+// AdminRequired is like Required but additionally checks that the session
+// belongs to a user with role="admin". Regular users get 403.
+func (a *Authenticator) AdminRequired(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := r.Cookie(sessionCookie)
+		if err != nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		ok, userID, err := a.Catalog.ValidateSession(r.Context(), c.Value)
+		if err != nil || !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if userID > 0 {
+			u, err := a.Catalog.GetUserByID(r.Context(), userID)
+			if err != nil || u.Role != "admin" {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func HashPassword(password string) (string, error) {
+	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	return string(bytes), err
+}
+
+func checkPassword(password, hash string) bool {
+	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
 	return err == nil
 }
