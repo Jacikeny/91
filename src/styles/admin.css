@@ -2515,9 +2515,9 @@
     min-height: 48px;
     flex-direction: row;
     align-items: center;
-    overflow-x: auto;
+    overflow-x: hidden;
     overflow-y: hidden;
-    padding: 6px var(--space-2);
+    padding: 6px calc(var(--space-2) + 42px) 6px var(--space-2);
     background: var(--glass-nav);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
@@ -2537,8 +2537,16 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    margin-left: auto;
-    flex-shrink: 0;
+    position: absolute;
+    top: 50%;
+    right: var(--space-2);
+    width: 36px;
+    height: 36px;
+    transform: translateY(-50%);
+    z-index: 1;
+    border-radius: var(--radius-pill);
+    background: var(--glass-nav);
+    box-shadow: -10px 0 14px var(--bg-page);
   }
 
   .admin-sidebar__mobile-overlay {
@@ -2571,15 +2579,21 @@
   }
 
   .admin-nav {
-    flex: 0 0 auto;
+    flex: 1 1 auto;
     flex-direction: row;
     flex-wrap: nowrap;
-    width: max-content;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
     margin: 0;
     padding: 0;
     gap: 6px;
     align-items: center;
+    scrollbar-width: none;
   }
+
+  .admin-nav::-webkit-scrollbar { display: none; }
 
   .admin-nav__group {
     flex: 0 0 auto;

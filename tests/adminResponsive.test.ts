@@ -463,7 +463,12 @@ test("mobile admin top navigation stays compact", () => {
   assert.match(ruleBody(css, ".admin-shell"), /flex-direction\s*:\s*column/);
   assert.match(ruleBody(css, ".admin-sidebar"), /height\s*:\s*48px/);
   assert.match(ruleBody(css, ".admin-sidebar"), /min-height\s*:\s*48px/);
+  assert.match(ruleBody(css, ".admin-sidebar"), /overflow-x\s*:\s*hidden/);
+  assert.match(ruleBody(css, ".admin-sidebar__mobile-menu"), /position\s*:\s*absolute/);
+  assert.match(ruleBody(css, ".admin-sidebar__mobile-menu"), /right\s*:\s*var\(--space-2\)/);
+  assert.match(ruleBody(css, ".admin-sidebar__mobile-menu"), /transform\s*:\s*translateY\(-50%\)/);
   assert.match(ruleBody(css, ".admin-nav"), /align-items\s*:\s*center/);
+  assert.match(ruleBody(css, ".admin-nav"), /overflow-x\s*:\s*auto/);
   assert.match(ruleBody(css, ".admin-nav__link"), /height\s*:\s*34px/);
   assert.match(ruleBody(css, ".admin-nav__link"), /line-height\s*:\s*1/);
   assert.match(ruleBody(css, ".admin-nav__link"), /flex\s*:\s*0\s+0\s+auto/);
